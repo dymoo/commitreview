@@ -24,7 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The secrets context is not available in an if:, but the env context is —
+      # so a fork PR or a clone without a key skips instead of failing red.
       - uses: ./
+        if: env.HAS_KEY == 'true'
+        env:
+          HAS_KEY: ${{ secrets.LLM_API_KEY != '' }}
         with:
           api-key: ${{ secrets.LLM_API_KEY }}
           base-url: ${{ vars.LLM_BASE_URL || 'https://openrouter.ai/api/v1' }}
