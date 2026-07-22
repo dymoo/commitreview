@@ -1,0 +1,47 @@
+# Review with models from several labs at once.
+#
+# Models from different labs fail differently. Asking one model twice mostly
+# gets you the same blind spot twice; asking three labs gets you three different
+# ones, and a finding two of them reach independently is worth taking seriously.
+#
+# Each model reviews on its own, every finding is cross-checked by a model that
+# did not find it, and the lead model below reconciles the result.
+#
+# Cost scales with panel size: three models is roughly three reviews plus one
+# synthesis call. Pair it with the mention trigger if that matters.
+name: commitreview (panel)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '@commitreview')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dymoo/commitreview@v1
+        with:
+          # The lead model. It reviews like the others, and reconciles at the end.
+          api-key: ${{ secrets.OPENROUTER_KEY }}
+          base-url: https://openrouter.ai/api/v1
+          model: moonshotai/kimi-k3
+
+          # Blank-line-separated blocks of "key: value". Anything a block leaves
+          # out is inherited from the lead, so a second model on the same
+          # provider is a single line.
+          panel: |
+            model: gpt-5.6
+            base-url: https://api.openai.com/v1
+            api-key: ${{ secrets.OPENAI_KEY }}
+
+            model: claude-sonnet-4-5
+            base-url: https://api.anthropic.com/v1
+            api-key: ${{ secrets.ANTHROPIC_KEY }}
+            label: claude
+
+          depth: thorough

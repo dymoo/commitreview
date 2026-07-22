@@ -394,6 +394,58 @@ test('an endpoint that rejects tool calling falls back instead of failing', asyn
   assert.ok(run.stdout.includes('Endpoint rejected tool calling'));
 });
 
+test('a panel reviews with every model, cross-checks, and lets the lead reconcile', async (t) => {
+  const seenModels = [];
+  const { server, captured, port } = await stubServer({
+    llmReply: (body) => {
+      seenModels.push(body.model);
+      const system = String(body.messages[0].content);
+      if (system.startsWith('You are the lead reviewer')) {
+        return JSON.stringify({ summary: 'Reconciled.', keep: [{ index: 0, title: 'Merged title' }] });
+      }
+      if (isRefutation(body)) return '{"verdict":"real","reason":"confirmed"}';
+      return JSON.stringify(FINDINGS);
+    },
+  });
+  t.after(() => server.close());
+
+  const run = await runAction(port, {
+    INPUT_PANEL: `model: second-model\napi-key: second-key`,
+    'INPUT_MODEL-LABEL': 'lead-model',
+  });
+  assert.equal(run.code, 0, run.stderr);
+
+  // Both models actually reviewed.
+  assert.ok(seenModels.includes('stub-model'), 'the lead model reviewed');
+  assert.ok(seenModels.includes('second-model'), 'the panel member reviewed');
+
+  // Agreement across models is recorded rather than deduplicated away.
+  const posted = captured.reviews[0].comments[0].body;
+  assert.match(posted, /found independently by lead-model and second-model/);
+
+  // The lead reconciled, and the summary names the panel.
+  assert.match(posted, /Merged title/);
+  assert.match(captured.issueComments[0].body, /panel: `lead-model`, `second-model`/);
+  assert.match(captured.issueComments[0].body, /Reconciled\./);
+
+  // Neither key ever reaches the log.
+  const logged = run.stdout
+    .split('\n')
+    .filter((l) => !l.startsWith('::add-mask::'))
+    .join('\n');
+  assert.ok(!logged.includes('second-key'), 'a panel api-key must be masked too');
+  assert.ok(run.stdout.includes('::add-mask::second-key'));
+});
+
+test('a malformed panel fails the run rather than quietly reviewing with one model', async (t) => {
+  const { server, port } = await stubServer({ llmReply: () => '{}' });
+  t.after(() => server.close());
+
+  const run = await runAction(port, { INPUT_PANEL: 'base-url: https://example.invalid/v1' });
+  assert.equal(run.code, 1);
+  assert.match(run.stdout, /missing "model"/);
+});
+
 test('an unrelated event is skipped without spending a request', async (t) => {
   const { server, captured, port } = await stubServer({ llmReply: () => '{}' });
   t.after(() => server.close());

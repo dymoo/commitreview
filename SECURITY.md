@@ -11,9 +11,14 @@ commitreview runs inside your GitHub Actions runner. There is no hosted service,
 no telemetry and no third party. It makes network requests to exactly two places:
 the GitHub API, and the `base-url` you configure.
 
-**Your API key** is registered with the runner's secret masker on the first line
-of execution, before any other work happens, so it cannot appear in logs. It is
-sent only to `base-url`, in an `Authorization` header.
+**Your API keys** are registered with the runner's secret masker before any
+other work happens, so they cannot appear in logs. This covers every key in a
+`panel`, including ones inherited from the lead model. Each key is sent only to
+its own `base-url`, in an `Authorization` header — a panel member never sees
+another member's key.
+
+**A panel sends your diff to every provider you list.** That is the point, but
+it is worth saying plainly: three models means three companies receive the code.
 
 **What is sent to the model:** the changed hunks, surrounding source from the
 changed files, and the pull request title and description. Nothing else from the
