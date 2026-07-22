@@ -282,9 +282,20 @@ the API. Do not add an `actions/checkout` of the head ref to the same workflow;
 that is what makes `pull_request_target` dangerous, and it is not needed.
 
 **Comment triggers are gated by author association.** By default only the owner,
-organisation members and collaborators can spend your key. Setting
-`allowed-associations: ANY` on a public repository lets any stranger run reviews
-on your budget.
+organisation members and collaborators can spend your key, and `pr-number`
+cannot be used to step around that gate. Setting `allowed-associations: ANY` on
+a public repository lets any stranger run reviews on your budget.
+
+**The automatic trigger is not gated, by design.** On a public repository,
+`pull_request_target` means anyone who opens a pull request causes a review, and
+that spends your key. That is usually what you want, but if it is not, gate the
+job or drop the automatic trigger and review on mention only:
+
+```yaml
+jobs:
+  review:
+    if: contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+```
 
 **Prompt injection.** Diffs are untrusted input and are labelled as such to the
 model, which is instructed to treat them as data and to report injection

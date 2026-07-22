@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseDiff, anchorFinding, unquotePath, lineText } from '../src/diff.js';
+import { fileToDiff } from '../src/github.js';
 import { APP_DIFF, DELETED_DIFF, BINARY_DIFF, RENAME_DIFF, ADDED_DIFF } from './fixtures.js';
 
 const only = (diff) => parseDiff(diff)[0];
@@ -135,6 +136,66 @@ test('keeps a multi-line range only when both ends are in the same hunk', () => 
 
   const bad = anchorFinding({ path: f.path, line: 13, start_line: 99, side: 'RIGHT' }, f);
   assert.equal(bad.start_line, undefined);
+});
+
+test('a diff rebuilt from the files endpoint parses identically', () => {
+  // The fallback used when GitHub refuses to render a large diff.
+  const rebuilt = [
+    {
+      filename: 'src/app.js',
+      status: 'modified',
+      patch: [
+        '@@ -10,4 +10,5 @@ export function handler(req) {',
+        '   const id = req.params.id;',
+        '-  const user = db.get(id);',
+        '+  const user = await db.get(id);',
+        '+  if (!user) return null;',
+        '   return user.name;',
+        ' }',
+      ].join('\n'),
+    },
+    { filename: 'logo.png', status: 'modified', patch: null },
+    {
+      filename: 'c/d.js',
+      previous_filename: 'a/b.js',
+      status: 'renamed',
+      patch: '@@ -1,1 +1,1 @@\n-const b = 2;\n+const b = 3;',
+    },
+    { filename: 'new.js', status: 'added', patch: '@@ -0,0 +1,1 @@\n+export const x = 1;' },
+    { filename: 'gone.js', status: 'removed', patch: '@@ -1,1 +0,0 @@\n-was here' },
+  ]
+    .map(fileToDiff)
+    .join('');
+
+  const files = parseDiff(rebuilt);
+  assert.deepEqual(
+    files.map((f) => [f.path, f.status, f.binary]),
+    [
+      ['src/app.js', 'modified', false],
+      ['logo.png', 'modified', true],
+      ['c/d.js', 'renamed', false],
+      ['new.js', 'added', false],
+      ['gone.js', 'deleted', false],
+    ],
+  );
+
+  // The rebuilt modified file must anchor exactly like the real diff does.
+  const app = files[0];
+  assert.deepEqual(
+    [...app.rightLines.keys()].sort((a, b) => a - b),
+    [10, 11, 12, 13, 14],
+  );
+  assert.deepEqual(anchorFinding({ path: app.path, line: 12, side: 'RIGHT' }, app), {
+    path: 'src/app.js',
+    line: 12,
+    side: 'RIGHT',
+  });
+  assert.equal(files[2].oldPath, 'a/b.js');
+});
+
+test('a rebuilt path containing spaces survives the round trip', () => {
+  const diff = fileToDiff({ filename: 'my docs/read me.md', status: 'added', patch: '@@ -0,0 +1,1 @@\n+hello' });
+  assert.equal(parseDiff(diff)[0].path, 'my docs/read me.md');
 });
 
 test('lineText returns the source at a position for fingerprinting', () => {

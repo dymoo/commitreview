@@ -142,7 +142,8 @@ export async function postInline(gh, ctx, pr, comments) {
     await gh.createReview(ctx.owner, ctx.repo, ctx.prNumber, {
       commit_id: pr.head.sha,
       event: 'COMMENT',
-      body: '',
+      // The API requires a body for a COMMENT review; the detail is in the summary.
+      body: `**commitreview** left ${comments.length} comment${comments.length === 1 ? '' : 's'}.`,
       comments,
     });
     return comments.length;

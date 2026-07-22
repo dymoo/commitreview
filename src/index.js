@@ -22,7 +22,7 @@ async function main() {
 
   const gh = new GitHub(config.githubToken);
   if (ctx.trigger === 'mention' && ctx.commentId && !config.dryRun) {
-    await gh.addReaction(ctx.owner, ctx.repo, ctx.commentId, 'eyes');
+    await gh.addReaction(ctx.owner, ctx.repo, ctx.commentId, { isReviewComment: ctx.commentIsReview });
   }
 
   core.info(`Reviewing ${ctx.owner}/${ctx.repo}#${ctx.prNumber} with ${config.model}`);

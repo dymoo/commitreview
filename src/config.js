@@ -42,7 +42,13 @@ export const DEFAULT_IGNORES = [
 
 export function readConfig() {
   const apiKey = core.getInput('api-key');
-  if (!apiKey) throw new Error('Input "api-key" is required.');
+  if (!apiKey) {
+    throw new Error(
+      'Input "api-key" is required and resolved to an empty value. If this is a pull request from a fork, ' +
+        'note that GitHub does not expose secrets to `pull_request` runs — use `pull_request_target` or the ' +
+        'comment trigger instead. See https://github.com/dymoo/commitreview#security',
+    );
+  }
   // Masked immediately so nothing downstream can leak it into the log.
   core.mask(apiKey);
 
@@ -115,6 +121,7 @@ export function readConfig() {
  * @property {string} eventName
  * @property {any} payload
  * @property {number|null} commentId
+ * @property {boolean} [commentIsReview] the comment lives on a review, not the issue timeline
  * @property {number|null} [prNumber]
  * @property {string} [trigger]
  * @property {string} [focus]
@@ -139,8 +146,8 @@ export function readEvent(config) {
 
   const base = { owner, repo, eventName, payload, commentId: null };
 
-  if (config.prNumber) return { ...base, prNumber: config.prNumber, trigger: 'input' };
-
+  // Comment events are gated before anything else: a pr-number input must never
+  // be a way around the author-association check.
   if (eventName === 'issue_comment' || eventName === 'pull_request_review_comment') {
     const isPr = eventName === 'pull_request_review_comment' || payload.issue?.pull_request;
     if (!isPr) return { ...base, skip: 'comment is not on a pull request' };
@@ -163,8 +170,9 @@ export function readEvent(config) {
 
     return {
       ...base,
-      prNumber: payload.issue?.number ?? payload.pull_request?.number,
+      prNumber: config.prNumber ?? (payload.issue?.number || payload.pull_request?.number),
       commentId: payload.comment?.id ?? null,
+      commentIsReview: eventName === 'pull_request_review_comment',
       trigger: 'mention',
       // Anything after the trigger phrase is treated as a focus instruction.
       focus: extractFocus(body, phrase),
@@ -172,8 +180,10 @@ export function readEvent(config) {
   }
 
   if (eventName === 'pull_request' || eventName === 'pull_request_target') {
-    return { ...base, prNumber: payload.pull_request?.number, trigger: eventName };
+    return { ...base, prNumber: config.prNumber ?? payload.pull_request?.number, trigger: eventName };
   }
+
+  if (config.prNumber) return { ...base, prNumber: config.prNumber, trigger: 'input' };
 
   return { ...base, skip: `unsupported event "${eventName}" and no pr-number input` };
 }
