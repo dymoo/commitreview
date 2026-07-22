@@ -119,8 +119,16 @@ export function renderSummary(result, config) {
     );
   }
 
+  const context = result.codebase?.stats;
   const footer = [
     `model \`${config.model}\``,
+    config.depth && config.depth !== 'standard' ? `depth ${config.depth}` : null,
+    result.lenses?.length > 1 ? `${result.lenses.length} passes` : null,
+    context?.mode?.startsWith('agentic')
+      ? `${context.toolCalls} codebase lookup${context.toolCalls === 1 ? '' : 's'}`
+      : context?.definitions || context?.references
+        ? `${context.definitions} definition${context.definitions === 1 ? '' : 's'}, ${context.references} caller set${context.references === 1 ? '' : 's'}`
+        : null,
     `${usage.requests} request${usage.requests === 1 ? '' : 's'}`,
     usage.prompt || usage.completion ? `${usage.prompt + usage.completion} tokens` : null,
     refuted ? `${refuted} refuted` : null,

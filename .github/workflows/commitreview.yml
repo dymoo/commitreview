@@ -33,7 +33,7 @@ jobs:
         with:
           api-key: ${{ secrets.LLM_API_KEY }}
           base-url: ${{ vars.LLM_BASE_URL || 'https://openrouter.ai/api/v1' }}
-          model: ${{ vars.LLM_MODEL || 'z-ai/glm-4.6' }}
+          model: ${{ vars.LLM_MODEL || 'moonshotai/kimi-k3' }}
           instructions: |
             This action has no runtime dependencies — flag any import that is not
             from node: or a relative path.

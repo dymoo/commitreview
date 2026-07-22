@@ -18,27 +18,45 @@ export class LLM {
       jsonModeForced: config.jsonMode === 'on',
       temperature: true,
       maxTokensKey: 'max_tokens',
+      tools: true,
     };
     this.usage = { prompt: 0, completion: 0, requests: 0 };
   }
 
-  buildBody(messages) {
+  buildBody(messages, { tools = null, jsonMode = undefined } = {}) {
     /** @type {Record<string, unknown>} */
     const body = { model: this.config.model, messages };
     if (this.quirks.temperature) body.temperature = this.config.temperature;
     if (this.quirks.maxTokensKey) body[this.quirks.maxTokensKey] = this.config.maxOutputTokens;
-    if (this.quirks.jsonMode) body.response_format = { type: 'json_object' };
+    // response_format and tools do not mix on several gateways; tools win.
+    const wantJson = jsonMode === undefined ? this.quirks.jsonMode : jsonMode && this.quirks.jsonMode;
+    if (wantJson && !tools) body.response_format = { type: 'json_object' };
+    if (tools && this.quirks.tools) {
+      body.tools = tools;
+      body.tool_choice = 'auto';
+    }
     return body;
   }
 
   /** @returns {Promise<string>} raw assistant text */
-  async complete(messages) {
+  async complete(messages, options = {}) {
+    const { message } = await this.send(messages, options);
+    const content = message.content || message.reasoning_content || '';
+    return typeof content === 'string' ? content : JSON.stringify(content);
+  }
+
+  /**
+   * One request, returning the whole assistant message so a tool loop can see
+   * tool_calls. Adapts and retries around parameters the endpoint rejects.
+   * @returns {Promise<{message: any, finishReason: string}>}
+   */
+  async send(messages, options = {}) {
     const url = `${this.config.baseUrl}/chat/completions`;
     let attempt = 0;
     let networkRetries = 0;
 
     for (;;) {
-      const body = this.buildBody(messages);
+      const body = this.buildBody(messages, options);
       let res;
       try {
         res = await fetch(url, {
@@ -62,10 +80,12 @@ export class LLM {
         this.usage.requests++;
         this.usage.prompt += data?.usage?.prompt_tokens || 0;
         this.usage.completion += data?.usage?.completion_tokens || 0;
-        const message = data?.choices?.[0]?.message || {};
-        const content = message.content || message.reasoning_content || '';
-        if (!content) core.warning('Model returned an empty message.');
-        return typeof content === 'string' ? content : JSON.stringify(content);
+        const choice = data?.choices?.[0] || {};
+        const message = choice.message || {};
+        if (!message.content && !message.reasoning_content && !message.tool_calls?.length) {
+          core.warning('Model returned an empty message.');
+        }
+        return { message, finishReason: choice.finish_reason || '' };
       }
 
       const text = await res.text().catch(() => '');
@@ -91,6 +111,11 @@ export class LLM {
   /** Drop or rename whatever the endpoint just complained about. @returns {boolean} changed */
   adapt(errorText) {
     const t = errorText || '';
+    if (this.quirks.tools && /\btools?\b|tool_choice|function[_ ]call|function calling/i.test(t)) {
+      core.warning('Endpoint rejected tool calling — the reviewer will fall back to deterministic retrieval.');
+      this.quirks.tools = false;
+      return true;
+    }
     if (this.quirks.jsonMode && !this.quirks.jsonModeForced && /response_format|json_object|json_schema/i.test(t)) {
       core.warning('Endpoint rejected response_format — falling back to prompt-only JSON.');
       this.quirks.jsonMode = false;

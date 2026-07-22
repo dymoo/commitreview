@@ -24,10 +24,9 @@ jobs:
       - uses: dymoo/commitreview@v1
         with:
           api-key: ${{ secrets.LLM_API_KEY }}
-          base-url: https://api.openai.com/v1
-          model: gpt-5.1
-          min-severity: medium
-          refute-votes: 3
+          base-url: https://openrouter.ai/api/v1
+          model: moonshotai/kimi-k3
+          depth: thorough
           fail-on: high
           instructions: |
             Money is stored as integer minor units. Flag float arithmetic on money.

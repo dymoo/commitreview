@@ -40,6 +40,89 @@ export const DEFAULT_IGNORES = [
   '**/*.svg',
 ];
 
+/**
+ * Review perspectives. One generic pass finds the obvious; a pass that has been
+ * told to care about exactly one thing finds what a generic pass skims past.
+ * `depth` decides how many of these run — always in this order, most valuable
+ * first, so `review-passes: 2` means general plus security.
+ */
+export const LENSES = [
+  {
+    key: 'general',
+    focus: `Review everything. Weight logic errors, unhandled failures and edge cases the change introduces.`,
+  },
+  {
+    key: 'security',
+    focus: `Review as a security engineer, and report only security defects.
+Look for: injection of any kind, missing or incorrect authorisation, secrets or
+tokens reaching logs or responses, unsafe deserialisation, path traversal,
+SSRF, unvalidated redirects, weak or misused cryptography, timing-sensitive
+comparisons, and input that crosses a trust boundary without validation.
+Trace where the data comes from before deciding it is safe.`,
+  },
+  {
+    key: 'concurrency-and-resources',
+    focus: `Review as an engineer who has debugged production outages, and report
+only concurrency and resource defects. Look for: races on shared state, missing
+await, lost updates, check-then-act without a lock, deadlock ordering, unclosed
+handles, connections or streams, unbounded queues, caches and retries, missing
+cleanup on the error path, and work that grows with input inside a hot loop.`,
+  },
+  {
+    key: 'integration',
+    focus: `Review as the engineer who owns the callers, and report only defects
+that appear at the seams. Look for: signature, return-type and thrown-error
+changes whose existing callers were not updated, contract changes to APIs,
+events or database schemas, migrations that are not backwards compatible or not
+reversible, config and feature flags read but never set, and behaviour that
+changes for existing data. The codebase context lists the existing callers —
+check them one by one.`,
+  },
+];
+
+/**
+ * How hard to look. Every value here is only a default — an explicit input
+ * always wins, so `depth: thorough` with `refute-votes: 1` does what it says.
+ */
+export const DEPTH_PRESETS = {
+  quick: {
+    contextLines: 8,
+    maxInputTokens: 40000,
+    chunkTokens: 20000,
+    refuteVotes: 1,
+    maxFindings: 15,
+    minSeverity: 'medium',
+    repoContext: 'off',
+    maxRelatedTokens: 0,
+    lenses: 1,
+    agentTurns: 6,
+  },
+  standard: {
+    contextLines: 20,
+    maxInputTokens: 120000,
+    chunkTokens: 30000,
+    refuteVotes: 1,
+    maxFindings: 25,
+    minSeverity: 'low',
+    repoContext: 'auto',
+    maxRelatedTokens: 25000,
+    lenses: 1,
+    agentTurns: 12,
+  },
+  thorough: {
+    contextLines: 40,
+    maxInputTokens: 400000,
+    chunkTokens: 60000,
+    refuteVotes: 3,
+    maxFindings: 40,
+    minSeverity: 'nit',
+    repoContext: 'auto',
+    maxRelatedTokens: 90000,
+    lenses: 4,
+    agentTurns: 28,
+  },
+};
+
 export function readConfig() {
   const apiKey = core.getInput('api-key');
   if (!apiKey) {
@@ -55,7 +138,19 @@ export function readConfig() {
   const model = core.getInput('model');
   if (!model) throw new Error('Input "model" is required.');
 
-  const minSeverity = core.getInput('min-severity', 'low').toLowerCase();
+  const depth = core.getInput('depth', 'standard').toLowerCase();
+  if (!DEPTH_PRESETS[depth]) {
+    throw new Error(`Input "depth" must be one of ${Object.keys(DEPTH_PRESETS).join(', ')}`);
+  }
+  const preset = DEPTH_PRESETS[depth];
+
+  const repoContext = core.getInput('repo-context', preset.repoContext).toLowerCase();
+  if (!['auto', 'off'].includes(repoContext)) throw new Error('Input "repo-context" must be auto or off');
+
+  const agentic = core.getInput('agentic', 'auto').toLowerCase();
+  if (!['auto', 'on', 'off'].includes(agentic)) throw new Error('Input "agentic" must be auto, on or off');
+
+  const minSeverity = core.getInput('min-severity', preset.minSeverity).toLowerCase();
   if (!SEVERITIES.includes(minSeverity)) {
     throw new Error(`Input "min-severity" must be one of ${SEVERITIES.join(', ')}`);
   }
@@ -88,17 +183,24 @@ export function readConfig() {
     include: core.getLines('include'),
     ignore: [...(core.getBool('use-default-ignores', true) ? DEFAULT_IGNORES : []), ...core.getLines('ignore')],
 
+    depth,
+    repoContext,
+    agentic,
+    agentTurns: Math.max(1, core.getNumber('agent-turns', preset.agentTurns)),
+    maxRelatedTokens: core.getNumber('max-related-tokens', preset.maxRelatedTokens),
+    lenses: Math.max(1, Math.min(LENSES.length, core.getNumber('review-passes', preset.lenses))),
+
     maxFiles: core.getNumber('max-files', 60),
     maxFileBytes: core.getNumber('max-file-bytes', 400000),
-    contextLines: Math.max(0, core.getNumber('context-lines', 20)),
-    maxInputTokens: core.getNumber('max-input-tokens', 120000),
-    chunkTokens: core.getNumber('chunk-tokens', 30000),
+    contextLines: Math.max(0, core.getNumber('context-lines', preset.contextLines)),
+    maxInputTokens: core.getNumber('max-input-tokens', preset.maxInputTokens),
+    chunkTokens: core.getNumber('chunk-tokens', preset.chunkTokens),
     concurrency: Math.max(1, core.getNumber('concurrency', 4)),
 
-    maxFindings: core.getNumber('max-findings', 25),
+    maxFindings: core.getNumber('max-findings', preset.maxFindings),
     minSeverity,
     refute: core.getBool('refute', true),
-    refuteVotes: Math.max(1, core.getNumber('refute-votes', 1)),
+    refuteVotes: Math.max(1, core.getNumber('refute-votes', preset.refuteVotes)),
     instructions: core.getInput('instructions', ''),
 
     inlineComments: core.getBool('inline-comments', true),
@@ -108,7 +210,7 @@ export function readConfig() {
     dryRun: core.getBool('dry-run', false),
 
     temperature: core.getNumber('temperature', 0.1),
-    maxOutputTokens: core.getNumber('max-output-tokens', 8000),
+    maxOutputTokens: core.getNumber('max-output-tokens', 16000),
     jsonMode,
     requestTimeoutMs: core.getNumber('request-timeout', 180) * 1000,
   };

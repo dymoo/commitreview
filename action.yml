@@ -15,7 +15,7 @@ inputs:
     required: false
     default: https://api.openai.com/v1
   model:
-    description: Model id to review with (e.g. glm-4.6, gpt-5.1, anthropic/claude-sonnet-4.5).
+    description: Model id to review with, as your provider names it.
     required: true
 
   github-token:
@@ -36,6 +36,38 @@ inputs:
       strangers spend your API key).
     required: false
     default: OWNER,MEMBER,COLLABORATOR
+
+  depth:
+    description: >-
+      How hard to look — quick, standard or thorough. Sets the defaults for
+      context, passes, verification votes and severity floor. Any input you set
+      explicitly still wins. thorough costs several times more than standard.
+    required: false
+    default: standard
+  repo-context:
+    description: >-
+      auto reads the repository at the head commit so the reviewer can see
+      definitions, callers and project rules. off reviews the diff alone.
+    required: false
+    default: auto
+  agentic:
+    description: >-
+      Let the model investigate the codebase itself with read-only tools —
+      on, off, or auto to use it when the endpoint supports tool calling and
+      fall back to deterministic retrieval when it does not.
+    required: false
+    default: auto
+  agent-turns:
+    description: Maximum investigation turns before the agent must report back.
+    required: false
+  review-passes:
+    description: >-
+      How many review perspectives to run, in order: general, security,
+      concurrency and resources, integration. Defaults from depth.
+    required: false
+  max-related-tokens:
+    description: Approximate ceiling on codebase context sent alongside the diff.
+    required: false
 
   include:
     description: Newline-separated globs. When set, only matching files are reviewed.
@@ -61,15 +93,12 @@ inputs:
   context-lines:
     description: Lines of surrounding source shown around each hunk. 0 uses the raw diff context only.
     required: false
-    default: '20'
   max-input-tokens:
     description: Approximate ceiling on diff tokens sent across the whole review.
     required: false
-    default: '120000'
   chunk-tokens:
     description: Approximate ceiling on diff tokens per model request.
     required: false
-    default: '30000'
   concurrency:
     description: Maximum in-flight model requests.
     required: false
@@ -78,11 +107,9 @@ inputs:
   max-findings:
     description: Keep at most this many findings before verification and posting.
     required: false
-    default: '25'
   min-severity:
-    description: Lowest severity to post — one of critical, high, medium, low, nit.
+    description: Lowest severity to post — one of critical, high, medium, low, nit. Defaults from depth.
     required: false
-    default: low
   refute:
     description: Run an adversarial pass that tries to disprove each finding before posting it.
     required: false
@@ -90,7 +117,6 @@ inputs:
   refute-votes:
     description: Independent refutation attempts per finding. A finding survives on a majority.
     required: false
-    default: '1'
   instructions:
     description: Extra review guidance appended to the system prompt (project conventions, focus areas).
     required: false
@@ -122,9 +148,11 @@ inputs:
     required: false
     default: '0.1'
   max-output-tokens:
-    description: Maximum tokens per model response.
+    description: >-
+      Maximum tokens per model response. Reasoning models spend this budget on
+      thinking before they answer, so leave headroom when using one.
     required: false
-    default: '8000'
+    default: '16000'
   json-mode:
     description: >-
       Send response_format=json_object — on, off, or auto to try it and fall back

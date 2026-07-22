@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeFinding, dedupeFindings, systemPrompt } from '../src/review.js';
+import { normalizeFinding, dedupeFindings, systemPrompt, REFUTE_SYSTEM, renderConversation } from '../src/review.js';
 import { fingerprint, collectFingerprints, commentBody, renderSummary, SUMMARY_MARKER } from '../src/post.js';
-import { containsPhrase, extractFocus, severityRank } from '../src/config.js';
+import { containsPhrase, extractFocus, severityRank, LENSES } from '../src/config.js';
 
 const PATHS = ['src/app.js', 'lib/deep/util.ts'];
 
@@ -62,13 +62,52 @@ test('severity ordering puts critical first', () => {
   assert.equal(severityRank('bogus'), severityRank('low'));
 });
 
-test('the system prompt teaches the column format and forbids context anchors', () => {
+test('the system prompt teaches the column format and rules out context anchors', () => {
   const p = systemPrompt({ maxFindings: 5, instructions: 'Prefer async/await.' });
   assert.ok(p.includes("marker '~'"));
-  assert.ok(p.includes('NEVER reference'));
+  assert.ok(p.includes('It cannot carry a comment'));
   assert.ok(p.includes('untrusted'));
   assert.ok(p.includes('Prefer async/await.'));
   assert.ok(p.includes('at most 5 findings'));
+});
+
+test('the admission test is phrased as gates to pass, not things to avoid', () => {
+  const p = systemPrompt({ maxFindings: 5 });
+  // Negation is the weakest instruction a model receives, so the filter has to
+  // read as criteria a finding must satisfy.
+  assert.ok(p.includes('Keep it only when'));
+  assert.ok(p.includes('Can you name the concrete input'));
+  assert.ok(p.includes('Can you name what actually goes wrong'));
+});
+
+/** Prompts are wrapped prose; assert on content, not on where lines break. */
+const flat = (s) => String(s).replace(/\s+/g, ' ');
+
+test('the prompt tells the model whether it actually has codebase context', () => {
+  const withRepo = flat(systemPrompt({ maxFindings: 5 }, { hasCodebase: true }));
+  assert.ok(withRepo.includes('work through the listed callers'));
+  assert.ok(!withRepo.includes('not the whole repository'));
+
+  const without = flat(systemPrompt({ maxFindings: 5 }, { hasCodebase: false }));
+  assert.ok(without.includes('not the whole repository'));
+  assert.ok(!without.includes('work through the listed callers'));
+});
+
+test('each lens narrows what the pass is looking for', () => {
+  const security = systemPrompt({ maxFindings: 5 }, { lens: LENSES.find((l) => l.key === 'security') });
+  assert.ok(security.includes('only security defects'));
+  assert.ok(security.includes('path traversal'));
+
+  const integration = systemPrompt({ maxFindings: 5 }, { lens: LENSES.find((l) => l.key === 'integration') });
+  assert.ok(integration.includes('existing callers were not updated'));
+});
+
+test('the refuter is a kill mandate, not a second opinion', () => {
+  // The finder's severity and confidence are withheld on purpose: they anchor.
+  assert.ok(REFUTE_SYSTEM.includes('kill mandate'));
+  assert.ok(REFUTE_SYSTEM.includes('destroy it'));
+  assert.ok(REFUTE_SYSTEM.includes('Return "not_real" when you are unsure'));
+  assert.ok(!REFUTE_SYSTEM.includes('confidence'));
 });
 
 test('fingerprints follow the code, not the line number', () => {
@@ -148,7 +187,7 @@ const RESULT = {
 };
 
 test('the summary carries its marker, the counts and every fingerprint', () => {
-  const md = renderSummary(RESULT, { model: 'glm-4.6' });
+  const md = renderSummary(RESULT, { model: 'test-model' });
   assert.ok(md.startsWith(SUMMARY_MARKER));
   assert.ok(md.includes('**2 findings** across 7 files'));
   assert.ok(md.includes('Adds a cache layer.'));

@@ -10,7 +10,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { APP_DIFF, APP_CONTENT } from './fixtures.js';
 
@@ -42,9 +42,30 @@ const FINDINGS = {
   ],
 };
 
+/** A real gzipped tar laid out the way GitHub's tarball endpoint lays one out. */
+function makeTarball(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commitreview-src-'));
+  const top = 'o-r-headsha';
+  for (const [rel, content] of Object.entries(files)) {
+    const full = path.join(dir, top, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, content);
+  }
+  const archive = path.join(dir, 'repo.tar.gz');
+  execFileSync('tar', ['-czf', archive, '-C', dir, top]);
+  return fs.readFileSync(archive);
+}
+
+const REPO_FILES = {
+  'src/app.js': APP_CONTENT,
+  'src/db.js': 'export const db = {\n  get(id) { return rows[id]; }, // undefined when missing\n};\n',
+  'AGENTS.md': '# Rules\nEvery handler must return a Response.\n',
+};
+
 /** Serves both APIs and records everything it was asked to write. */
-async function stubServer({ llmReply }) {
+async function stubServer({ llmReply, rejectTools = false, repoFiles = REPO_FILES }) {
   const captured = { reviews: [], issueComments: [], llmRequests: [] };
+  const tarball = makeTarball(repoFiles);
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -56,11 +77,23 @@ async function stubServer({ llmReply }) {
         res.end(typeof body === 'string' ? body : JSON.stringify(body));
       };
 
+      if (url.pathname === `/repos/o/r/tarball/headsha`) {
+        res.writeHead(200, { 'content-type': 'application/gzip' });
+        return res.end(tarball);
+      }
+
       if (url.pathname === '/v1/chat/completions') {
         const body = JSON.parse(raw);
         captured.llmRequests.push(body);
+        if (rejectTools && body.tools) {
+          return send(400, { error: { message: 'this model does not support tools' } });
+        }
+        const reply = llmReply(body);
+        // A string is plain content; an object is a whole assistant message,
+        // which is how a test drives tool calls.
+        const message = typeof reply === 'string' ? { content: reply } : reply;
         return send(200, {
-          choices: [{ message: { content: llmReply(body) } }],
+          choices: [{ message }],
           usage: { prompt_tokens: 10, completion_tokens: 5 },
         });
       }
@@ -78,6 +111,10 @@ async function stubServer({ llmReply }) {
       if (url.pathname === '/repos/o/r/contents/src/app.js') return send(200, APP_CONTENT, 'text/plain');
       if (url.pathname === '/repos/o/r/pulls/1/comments' && req.method === 'GET') return send(200, []);
       if (url.pathname === '/repos/o/r/issues/1/comments' && req.method === 'GET') return send(200, []);
+      if (url.pathname === '/repos/o/r/pulls/1/reviews' && req.method === 'GET') return send(200, []);
+      if (url.pathname === '/repos/o/r/pulls/1/commits') {
+        return send(200, [{ sha: 'abc1234def', commit: { message: 'Guard the user lookup\n\nlonger body' } }]);
+      }
       if (url.pathname === '/repos/o/r/pulls/1/reviews' && req.method === 'POST') {
         captured.reviews.push(JSON.parse(raw));
         return send(200, { id: 1 });
@@ -95,12 +132,13 @@ async function stubServer({ llmReply }) {
   return { server, captured, port: address.port };
 }
 
-const isRefutation = (body) => String(body.messages[0].content).startsWith('You are verifying');
+const isRefutation = (body) => String(body.messages[0].content).includes('kill mandate');
 
 async function runAction(port, extraInputs = {}) {
+  const { __event, ...inputs } = extraInputs;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'commitreview-'));
   const eventPath = path.join(tmp, 'event.json');
-  fs.writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 1 } }));
+  fs.writeFileSync(eventPath, JSON.stringify(__event || { pull_request: { number: 1 } }));
   const outputPath = path.join(tmp, 'output.txt');
   fs.writeFileSync(outputPath, '');
 
@@ -117,7 +155,10 @@ async function runAction(port, extraInputs = {}) {
     INPUT_MODEL: 'stub-model',
     'INPUT_BASE-URL': `http://127.0.0.1:${port}/v1`,
     'INPUT_GITHUB-TOKEN': 'gh-token',
-    ...extraInputs,
+    // Repository context is exercised separately; most cases only care about
+    // the review pipeline itself.
+    'INPUT_REPO-CONTEXT': 'off',
+    ...inputs,
   };
 
   const child = spawn(process.execPath, [ENTRY], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -240,6 +281,113 @@ test('fail-on turns a surviving finding into a failed step', async (t) => {
   const run = await runAction(port, { 'INPUT_FAIL-ON': 'high' });
   assert.equal(run.code, 1);
   assert.match(run.stdout, /at or above severity "high"/);
+});
+
+/** A mention carrying a question, on a pull request. */
+function mentionEvent(body) {
+  return {
+    issue: { number: 1, pull_request: {} },
+    comment: { id: 42, body, author_association: 'OWNER', user: { login: 'alice', type: 'User' } },
+  };
+}
+
+test('a mention with a question is answered, not reviewed', async (t) => {
+  const { server, captured, port } = await stubServer({
+    llmReply: () => 'The retry loop resets `attempt` on success, so the backoff is correct. See `src/app.js:11`.',
+  });
+  t.after(() => server.close());
+
+  const run = await runAction(port, {
+    GITHUB_EVENT_NAME: 'issue_comment',
+    __event: mentionEvent('@commitreview is the backoff actually reset between attempts?'),
+  });
+  assert.equal(run.code, 0, run.stderr);
+
+  // A question is a conversation: no review, no inline comments.
+  assert.equal(captured.reviews.length, 0);
+  assert.equal(run.outputs.reviewed, 'false');
+  assert.equal(captured.issueComments.length, 1);
+  assert.match(captured.issueComments[0].body, /backoff is correct/);
+  assert.ok(!captured.issueComments[0].body.includes('commitreview:summary'), 'an answer is not a review summary');
+
+  // The question and the discussion reach the model.
+  const asked = captured.llmRequests[0].messages[1].content;
+  assert.match(asked, /is the backoff actually reset between attempts\?/);
+  assert.match(asked, /@alice asked/);
+  assert.match(asked, /Guard the user lookup/, 'commit subjects are part of the context');
+});
+
+test('a bare mention still runs a review', async (t) => {
+  const { server, captured, port } = await stubServer({
+    llmReply: (body) => (isRefutation(body) ? '{"verdict":"real"}' : JSON.stringify(FINDINGS)),
+  });
+  t.after(() => server.close());
+
+  const run = await runAction(port, {
+    GITHUB_EVENT_NAME: 'issue_comment',
+    __event: mentionEvent('@commitreview'),
+  });
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(run.outputs.reviewed, 'true');
+  assert.equal(captured.reviews.length, 1);
+});
+
+test('the agent investigates with tools, and the findings pass carries the briefing', async (t) => {
+  const { server, captured, port } = await stubServer({
+    llmReply: (body) => {
+      const system = String(body.messages[0].content);
+      if (system.startsWith('You are investigating')) {
+        // First turn: ask to read a file. Second turn: hand over the briefing.
+        const alreadyRead = body.messages.some((m) => m.role === 'tool');
+        if (!alreadyRead) {
+          return {
+            content: null,
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"src/db.js"}' } },
+            ],
+          };
+        }
+        return '## Evidence\n`src/db.js:2` — `get` returns undefined for a missing row, it does not throw.';
+      }
+      if (isRefutation(body)) return '{"verdict":"real"}';
+      return JSON.stringify(FINDINGS);
+    },
+  });
+  t.after(() => server.close());
+
+  const run = await runAction(port, { 'INPUT_REPO-CONTEXT': 'auto', INPUT_AGENTIC: 'on' });
+  assert.equal(run.code, 0, run.stderr);
+
+  // The tool call was actually served from the repository.
+  const toolResults = captured.llmRequests.flatMap((b) => b.messages.filter((m) => m.role === 'tool'));
+  assert.ok(toolResults.length >= 1, 'the agent read a file');
+  assert.match(toolResults[0].content, /undefined when missing/);
+
+  // The briefing reaches the review pass as codebase context.
+  const findPass = captured.llmRequests.find((b) =>
+    String(b.messages[0].content).startsWith('You are a staff engineer'),
+  );
+  assert.match(findPass.messages[1].content, /BEGIN CODEBASE CONTEXT/);
+  assert.match(findPass.messages[1].content, /it does not throw/);
+  assert.match(String(findPass.messages[0].content), /work\s+through the listed callers/);
+
+  assert.match(captured.issueComments[0].body, /codebase lookup/);
+});
+
+test('an endpoint that rejects tool calling falls back instead of failing', async (t) => {
+  const { server, captured, port } = await stubServer({
+    llmReply: (body) => (isRefutation(body) ? '{"verdict":"real"}' : JSON.stringify(FINDINGS)),
+    rejectTools: true,
+  });
+  t.after(() => server.close());
+
+  const run = await runAction(port, { 'INPUT_REPO-CONTEXT': 'auto', INPUT_AGENTIC: 'auto' });
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(captured.reviews.length, 1, 'the review still happened');
+  // Exactly one probe: the rejection is what discovers the limitation, and it
+  // must not be repeated for every later request.
+  assert.equal(captured.llmRequests.filter((b) => b.tools).length, 1);
+  assert.ok(run.stdout.includes('Endpoint rejected tool calling'));
 });
 
 test('an unrelated event is skipped without spending a request', async (t) => {

@@ -30,4 +30,4 @@ jobs:
         with:
           api-key: ${{ secrets.LLM_API_KEY }}
           base-url: https://openrouter.ai/api/v1
-          model: z-ai/glm-4.6
+          model: moonshotai/kimi-k3

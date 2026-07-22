@@ -21,7 +21,7 @@ jobs:
         with:
           api-key: not-used
           base-url: http://10.0.0.20:8000/v1
-          model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+          model: your-loaded-model
           # Smaller local models do fewer things well: keep the context tight,
           # skip response_format, and let the refute pass drop the noise.
           json-mode: off

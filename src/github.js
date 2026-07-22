@@ -127,10 +127,56 @@ export class GitHub {
     return this.paginate(`/repos/${owner}/${repo}/issues/${number}/comments`);
   }
 
+  /**
+   * Everything humans have already said about this pull request. Reviewing
+   * without it re-raises points the thread settled three days ago.
+   */
+  async getConversation(owner, repo, number) {
+    const [issueComments, reviewComments, reviews, commits] = await Promise.all([
+      this.listIssueComments(owner, repo, number),
+      this.listReviewComments(owner, repo, number),
+      this.paginate(`/repos/${owner}/${repo}/pulls/${number}/reviews`),
+      this.paginate(`/repos/${owner}/${repo}/pulls/${number}/commits`, { max: 250 }),
+    ]);
+    return { issueComments, reviewComments, reviews, commits };
+  }
+
+  getTree(owner, repo, sha) {
+    return this.request('GET', `/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`).then((r) => r.data);
+  }
+
+  /** The whole repository at a commit, in one request. */
+  async downloadTarball(owner, repo, sha, maxBytes) {
+    const res = await fetch(`${this.apiUrl}/repos/${owner}/${repo}/tarball/${sha}`, {
+      headers: { authorization: `Bearer ${this.token}`, 'user-agent': USER_AGENT },
+      signal: AbortSignal.timeout(300000),
+    });
+    if (!res.ok) throw new HttpError(res.status, `tarball download failed: ${res.status}`);
+
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(`archive is ${Math.round(declared / 1e6)} MB, over the ${Math.round(maxBytes / 1e6)} MB limit`);
+    }
+    const data = Buffer.from(await res.arrayBuffer());
+    if (data.length > maxBytes) {
+      throw new Error(
+        `archive is ${Math.round(data.length / 1e6)} MB, over the ${Math.round(maxBytes / 1e6)} MB limit`,
+      );
+    }
+    return { data, size: data.length };
+  }
+
   createReview(owner, repo, number, review) {
     return this.request('POST', `/repos/${owner}/${repo}/pulls/${number}/reviews`, { body: review }).then(
       (r) => r.data,
     );
+  }
+
+  /** Reply inside an existing inline review thread. */
+  replyToReviewComment(owner, repo, number, commentId, body) {
+    return this.request('POST', `/repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies`, {
+      body: { body },
+    }).then((r) => r.data);
   }
 
   createIssueComment(owner, repo, number, body) {
