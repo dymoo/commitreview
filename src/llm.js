@@ -13,6 +13,8 @@ import * as core from './core.js';
 export class LLM {
   constructor(config) {
     this.config = config;
+    // Identifies this client in findings and in the summary footer.
+    this.label = config.label || config.model;
     this.quirks = {
       jsonMode: config.jsonMode !== 'off',
       jsonModeForced: config.jsonMode === 'on',
@@ -70,7 +72,7 @@ export class LLM {
           signal: AbortSignal.timeout(this.config.requestTimeoutMs),
         });
       } catch (err) {
-        if (networkRetries++ >= 3) throw new Error(`Model request failed: ${err.message}`);
+        if (networkRetries++ >= 3) throw new Error(`Model request failed: ${err.message}`, { cause: err });
         await core.sleep(backoff(networkRetries));
         continue;
       }
@@ -174,7 +176,7 @@ export function extractJson(text) {
   const cleaned = String(text)
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<\/?thinking>/gi, '')
-    .replace(/^﻿/, '');
+    .replace(/^\uFEFF/, '');
 
   const candidates = [];
   const fence = /```(?:json5?|jsonc)?\s*\n?([\s\S]*?)```/i.exec(cleaned);

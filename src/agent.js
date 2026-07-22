@@ -213,7 +213,7 @@ function parseArgs(raw) {
  *
  * @returns {Promise<{text: string, turns: number, calls: number, capped: boolean}|null>}
  */
-export async function toolLoop(llm, { system, user, repo, files, config, turns, closing, label = 'investigation' }) {
+export async function toolLoop(llm, { system, user, repo, config, turns, closing, label = 'investigation' }) {
   if (!repo) return null;
   const messages = [
     { role: 'system', content: system },
@@ -293,7 +293,6 @@ Investigate, then produce the briefing.`;
     system: SYSTEM,
     user,
     repo,
-    files,
     config,
     turns: config.agentTurns,
     closing: 'Stop investigating and write the briefing now, from what you have.',

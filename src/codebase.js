@@ -284,8 +284,7 @@ export async function buildCodebaseContext(repo, files, config) {
       `These are this repository's own instructions to contributors and coding agents. ` +
       `Treat them as binding: code that violates a rule stated here is a finding, ` +
       `with category "convention", even when it would otherwise be correct. ` +
-      `Where a rule contradicts your general preferences, the rule wins.\n\n` +
-      blocks.join('\n\n');
+      `Where a rule contradicts your general preferences, the rule wins.\n\n${blocks.join('\n\n')}`;
     if (fits(text)) {
       sections.push(text);
       spent += estimateTokens(text);
@@ -332,8 +331,9 @@ export async function buildCodebaseContext(repo, files, config) {
   if (referenceBlocks.length) {
     sections.push(
       `## Existing callers of symbols this change modifies\n` +
-        `Check each one against the new behaviour — these are what a signature or contract change breaks.\n\n` +
-        referenceBlocks.join('\n\n'),
+        `Check each one against the new behaviour — these are what a signature or contract change breaks.\n\n${referenceBlocks.join(
+          '\n\n',
+        )}`,
     );
   }
 

@@ -37,6 +37,27 @@ inputs:
     required: false
     default: OWNER,MEMBER,COLLABORATOR
 
+  panel:
+    description: >-
+      Extra models to review with, as blank-line-separated blocks of "key: value"
+      accepting model, base-url, api-key and label. Every model reviews
+      independently, each finding is cross-checked by a model that did not find
+      it, and the lead model reconciles the result. Anything a block omits is
+      inherited from the lead model. Costs one full review per model.
+    required: false
+    default: ''
+  model-label:
+    description: Short name for the lead model in comments and the summary. Defaults to the model id.
+    required: false
+
+  taste:
+    description: >-
+      Run the taste pass, which looks for project inconsistency and unjustified
+      complexity rather than defects — reinvention of code that already exists,
+      patterns applied unevenly, and abstractions nobody asked for.
+    required: false
+    default: 'true'
+
   depth:
     description: >-
       How hard to look — quick, standard or thorough. Sets the defaults for

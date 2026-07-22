@@ -6,13 +6,10 @@
  * the *text* of the line it points at — not the line number — so a finding
  * survives a rebase or an unrelated edit above it without being re-posted.
  */
-import { createHash } from 'node:crypto';
 import * as core from './core.js';
 import { severityRank } from './config.js';
-import { normalizeTitle } from './review.js';
 
 export const SUMMARY_MARKER = '<!-- commitreview:summary -->';
-const FP_MARKER = /<!--\s*commitreview:fp=([0-9a-f]{12})\s*-->/g;
 
 const SEVERITY_ICON = {
   critical: '🛑',
@@ -21,22 +18,6 @@ const SEVERITY_ICON = {
   low: '🟡',
   nit: '⚪',
 };
-
-export function fingerprint(finding, codeLine) {
-  const title = normalizeTitle(finding.title);
-  const code = String(codeLine || finding.line || '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return createHash('sha256').update(`${finding.path}|${title}|${code}`).digest('hex').slice(0, 12);
-}
-
-export function collectFingerprints(bodies) {
-  const seen = new Set();
-  for (const body of bodies) {
-    for (const m of String(body || '').matchAll(FP_MARKER)) seen.add(m[1]);
-  }
-  return seen;
-}
 
 function fence(content) {
   const longest = (content.match(/`{3,}/g) || []).reduce((n, s) => Math.max(n, s.length), 2);
@@ -57,7 +38,20 @@ export function commentBody(finding, anchor, config) {
     parts.push('', `<sub>Anchored to the nearest changed line; the model referenced line ${finding.line}.</sub>`);
   }
   if (finding.refutation) parts.push('', `<sub>Verifier: ${finding.refutation}</sub>`);
-  parts.push('', `<sub>commitreview · confidence ${finding.confidence.toFixed(2)}</sub>`);
+
+  // Independent agreement across labs is the strongest signal a panel produces,
+  // so it belongs on the comment rather than buried in the summary.
+  const found = finding.foundBy || [];
+  const attribution =
+    found.length > 1
+      ? `found independently by ${found.join(' and ')}`
+      : found.length === 1
+        ? `found by ${found[0]}`
+        : '';
+  parts.push(
+    '',
+    `<sub>commitreview · confidence ${finding.confidence.toFixed(2)}${attribution ? ` · ${attribution}` : ''}</sub>`,
+  );
   parts.push(`<!-- commitreview:fp=${finding.fp} -->`);
   return parts.join('\n');
 }
@@ -121,9 +115,9 @@ export function renderSummary(result, config) {
 
   const context = result.codebase?.stats;
   const footer = [
-    `model \`${config.model}\``,
+    result.panel?.length > 1 ? `panel: ${result.panel.map((m) => `\`${m}\``).join(', ')}` : `model \`${config.model}\``,
     config.depth && config.depth !== 'standard' ? `depth ${config.depth}` : null,
-    result.lenses?.length > 1 ? `${result.lenses.length} passes` : null,
+    result.lenses?.length > 1 ? `${result.lenses.length} passes (${result.lenses.join(', ')})` : null,
     context?.mode?.startsWith('agentic')
       ? `${context.toolCalls} codebase lookup${context.toolCalls === 1 ? '' : 's'}`
       : context?.definitions || context?.references

@@ -1,17 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as core from './core.js';
-import { readConfig, readEvent, severityRank, LENSES } from './config.js';
+import { readConfig, readEvent, severityRank, LENSES, TASTE_LENS } from './config.js';
 import { GitHub } from './github.js';
 import { parseDiff, anchorFinding, lineText } from './diff.js';
 import { selectFiles, renderFile, buildChunks, sliceAround } from './context.js';
 import { LLM } from './llm.js';
-import { findFindings, refuteFinding, dedupeFindings } from './review.js';
+import { findFindings, refuteFinding, synthesise } from './review.js';
+import { mergeFindings, fingerprint, collectFingerprints } from './findings.js';
 import { buildCodebaseContext } from './codebase.js';
 import { investigate } from './agent.js';
 import { answer, isReviewRequest, findThread } from './chat.js';
 import { openRepo } from './repo.js';
-import { fingerprint, collectFingerprints, commentBody, renderSummary, postInline, upsertSummary } from './post.js';
+import { commentBody, renderSummary, postInline, upsertSummary } from './post.js';
 
 async function main() {
   const config = readConfig();
@@ -42,12 +43,13 @@ async function main() {
 
   // Reading the repository is one request and everything downstream benefits.
   const repo = await openRepo(gh, { owner: ctx.owner, repo: ctx.repo, sha: pr.head.sha, config });
-  const llm = new LLM(config);
-  if (config.agentic === 'off') llm.quirks.tools = false;
+  const panel = config.panel.map((member) => new LLM({ ...config, ...member }));
+  const llm = panel[0];
+  if (config.agentic === 'off') for (const client of panel) client.quirks.tools = false;
 
   // A mention carrying an actual question is a conversation, not a review.
   if (ctx.trigger === 'mention' && !isReviewRequest(ctx.focus)) {
-    return runChat({ config, ctx, gh, llm, pr, conversation, repo, files: selected, diffText });
+    return runChat({ config, ctx, gh, llm, pr, conversation, repo, diffText });
   }
 
   core.info(`Reviewing ${ctx.owner}/${ctx.repo}#${ctx.prNumber} with ${config.model} (depth: ${config.depth})`);
@@ -82,8 +84,9 @@ async function main() {
   const rendered = selected.flatMap((file, i) => renderFile(file, contents[i], config));
   const { chunks, dropped } = buildChunks(rendered, config);
   core.info(
-    `Prepared ${chunks.length} request(s), ~${chunks.reduce((n, c) => n + c.tokens, 0)} tokens` +
-      (dropped.length ? `, ${dropped.length} file(s) dropped for budget` : ''),
+    `Prepared ${chunks.length} request(s), ~${chunks.reduce((n, c) => n + c.tokens, 0)} tokens${
+      dropped.length ? `, ${dropped.length} file(s) dropped for budget` : ''
+    }`,
   );
   for (const d of dropped) core.warning(`Not reviewed: ${d.path} — ${d.reason}`);
 
@@ -93,12 +96,18 @@ async function main() {
   for (const block of rendered) byPath.set(block.path, `${byPath.get(block.path) || ''}\n\n${block.text}`);
   const fileByPath = new Map(selected.map((f) => [f.path, f]));
 
-  const lenses = LENSES.slice(0, config.lenses);
-  const jobs = lenses.flatMap((lens) => chunks.map((chunk, index) => ({ lens, chunk, index })));
-  core.info(`Running ${jobs.length} review pass(es): ${lenses.map((l) => l.key).join(', ')}`);
+  const lenses = [...LENSES.slice(0, config.lenses), ...(config.taste ? [TASTE_LENS] : [])];
+  const jobs = panel.flatMap((client) =>
+    lenses.flatMap((lens) => chunks.map((chunk, index) => ({ client, lens, chunk, index }))),
+  );
+  core.info(
+    `Running ${jobs.length} review pass(es): ${lenses.map((l) => l.key).join(', ')}${
+      panel.length > 1 ? ` across ${panel.map((c) => c.label).join(', ')}` : ''
+    }`,
+  );
 
-  const passes = await core.pmap(jobs, config.concurrency, ({ lens, chunk, index }) =>
-    findFindings(llm, chunk, {
+  const passes = await core.pmap(jobs, config.concurrency, ({ client, lens, chunk, index }) =>
+    findFindings(client, chunk, {
       pr,
       focus: ctx.focus,
       config,
@@ -108,13 +117,13 @@ async function main() {
       index,
       total: chunks.length,
     }).catch((err) => {
-      core.warning(`${lens.key} review of part ${index + 1} failed: ${err.message}`);
+      core.warning(`${lens.key} review of part ${index + 1} by ${client.label} failed: ${err.message}`);
       return { summary: '', findings: [] };
     }),
   );
 
   const summaries = [...new Set(passes.map((p) => p.summary).filter(Boolean))].slice(0, 2);
-  let findings = dedupeFindings(passes.flatMap((p) => p.findings))
+  let findings = mergeFindings(passes.flatMap((p) => p.findings))
     .filter((f) => severityRank(f.severity) <= severityRank(config.minSeverity))
     .sort((a, b) => severityRank(a.severity) - severityRank(b.severity) || b.confidence - a.confidence);
 
@@ -127,7 +136,10 @@ async function main() {
   if (config.refute && findings.length) {
     const tasks = findings.flatMap((f) => Array.from({ length: config.refuteVotes }, (_, vote) => ({ f, vote })));
     const verdicts = await core.pmap(tasks, config.concurrency, ({ f, vote }) =>
-      refuteFinding(llm, f, sliceAround(byPath.get(f.path) || '', f.line), { config, vote, codebase }).catch((err) => {
+      refuteFinding(refuterFor(panel, f, vote), f, sliceAround(byPath.get(f.path) || '', f.line), {
+        vote,
+        codebase,
+      }).catch((err) => {
         core.warning(`Verification failed for ${f.path}:${f.line} — ${err.message}`);
         return { real: true, reason: '' }; // A broken verifier must not silently delete findings.
       }),
@@ -147,6 +159,21 @@ async function main() {
     }
     core.info(`Verification kept ${kept.length} of ${findings.length} findings.`);
     findings = kept.sort((a, b) => severityRank(a.severity) - severityRank(b.severity) || b.confidence - a.confidence);
+  }
+
+  // With a panel, the lead model reconciles what the others found. It may
+  // reword and re-rank, never relocate — anchors are taken from the original.
+  let leadSummary = '';
+  if (panel.length > 1 && findings.length > 1) {
+    const synthesised = await synthesise(panel[0], findings, { pr }).catch((err) => {
+      core.warning(`Synthesis failed (${err.message}); using the merged findings.`);
+      return null;
+    });
+    if (synthesised) {
+      core.info(`Lead model reconciled ${findings.length} findings down to ${synthesised.findings.length}.`);
+      findings = synthesised.findings;
+      leadSummary = synthesised.summary;
+    }
   }
 
   for (const f of findings) {
@@ -172,9 +199,10 @@ async function main() {
     duplicates,
     skipped,
     dropped,
-    summaries,
+    summaries: leadSummary ? [leadSummary] : summaries,
     refuted,
-    usage: llm.usage,
+    usage: totalUsage(panel),
+    panel: panel.map((c) => c.label),
     reviewedFiles: selected.length,
     codebase,
     lenses: lenses.map((l) => l.key),
@@ -236,13 +264,12 @@ async function gatherContext({ llm, repo, selected, diffText, pr, config }) {
 }
 
 /** Conversational reply — the @mention-with-a-question path. */
-async function runChat({ config, ctx, gh, llm, pr, conversation, repo, files, diffText }) {
+async function runChat({ config, ctx, gh, llm, pr, conversation, repo, diffText }) {
   core.info(`Answering @${ctx.payload?.comment?.user?.login || 'someone'} on #${ctx.prNumber}`);
   const thread = ctx.commentIsReview ? findThread(conversation, ctx.commentId) : null;
 
   const reply = await answer(llm, {
     repo,
-    files,
     diffText: diffText.length > 120000 ? `${diffText.slice(0, 120000)}\n… diff truncated …` : diffText,
     pr,
     conversation,
@@ -268,6 +295,29 @@ async function runChat({ config, ctx, gh, llm, pr, conversation, repo, files, di
   core.setOutput('summary', body);
 }
 
+/**
+ * Pick who judges a finding. With a panel, prefer a model that did NOT find it:
+ * a critic from another lab catches the correlated blind spots a same-family
+ * critic shares. Falls back to round-robin when every model found it.
+ */
+function refuterFor(panel, finding, vote) {
+  if (panel.length === 1) return panel[0];
+  const found = new Set(finding.foundBy || []);
+  const others = panel.filter((c) => !found.has(c.label));
+  const pool = others.length ? others : panel;
+  return pool[vote % pool.length];
+}
+
+const totalUsage = (panel) =>
+  panel.reduce(
+    (sum, c) => ({
+      requests: sum.requests + c.usage.requests,
+      prompt: sum.prompt + c.usage.prompt,
+      completion: sum.completion + c.usage.completion,
+    }),
+    { requests: 0, prompt: 0, completion: 0 },
+  );
+
 function emptyResult(pr) {
   return {
     pr,
@@ -282,6 +332,7 @@ function emptyResult(pr) {
     reviewedFiles: 0,
     codebase: null,
     lenses: [],
+    panel: [],
   };
 }
 

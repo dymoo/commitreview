@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeFinding, dedupeFindings, systemPrompt, REFUTE_SYSTEM, renderConversation } from '../src/review.js';
-import { fingerprint, collectFingerprints, commentBody, renderSummary, SUMMARY_MARKER } from '../src/post.js';
+import { normalizeFinding, mergeFindings, fingerprint, collectFingerprints } from '../src/findings.js';
+import { systemPrompt, REFUTE_SYSTEM } from '../src/prompts.js';
+import { commentBody, renderSummary, SUMMARY_MARKER } from '../src/post.js';
 import { containsPhrase, extractFocus, severityRank, LENSES } from '../src/config.js';
 
 const PATHS = ['src/app.js', 'lib/deep/util.ts'];
@@ -47,13 +48,18 @@ test('clamps confidence and defaults an unknown severity', () => {
   assert.equal(normalizeFinding({ path: 'src/app.js', title: 'x', confidence: 'nonsense' }, PATHS).confidence, 0.6);
 });
 
-test('the same defect found twice is reported once', () => {
+test('the same defect found twice is merged, and agreement is kept', () => {
   const findings = [
-    { path: 'a.js', line: 3, title: 'Null deref' },
-    { path: 'a.js', line: 3, title: 'null  DEREF!' },
-    { path: 'a.js', line: 4, title: 'Null deref' },
+    { path: 'a.js', line: 3, title: 'Null deref', severity: 'low', confidence: 0.4, foundBy: ['kimi'] },
+    { path: 'a.js', line: 3, title: 'null  DEREF!', severity: 'high', confidence: 0.9, foundBy: ['gpt'] },
+    { path: 'a.js', line: 4, title: 'Null deref', severity: 'low', confidence: 0.5, foundBy: ['kimi'] },
   ];
-  assert.equal(dedupeFindings(findings).length, 2);
+  const merged = mergeFindings(findings);
+  assert.equal(merged.length, 2);
+  // Two labs landing on the same finding independently is signal worth keeping.
+  assert.deepEqual(merged[0].foundBy, ['kimi', 'gpt']);
+  assert.equal(merged[0].severity, 'high', 'the more severe assessment wins');
+  assert.equal(merged[0].confidence, 0.9);
 });
 
 test('severity ordering puts critical first', () => {

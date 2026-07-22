@@ -81,6 +81,109 @@ check them one by one.`,
 ];
 
 /**
+ * The taste pass. Runs alongside whatever lenses `depth` selected, because the
+ * thing it looks for is orthogonal to correctness: not "does this work" but
+ * "was this decided".
+ *
+ * Its restraint half is a condensed form of the ponytail rules by Dietrich
+ * Gebert (https://github.com/dietrichgebert/ponytail), used with credit.
+ */
+export const TASTE_LENS = {
+  key: 'taste',
+  focus: `Review this change for consistency and restraint — what a codebase's most senior
+maintainer notices and no linter ever will.
+
+You are looking for slop. Not "an AI wrote this", and not "this is ugly" —
+slop is complexity that was never actually decided on. Generating code costs
+almost nothing now; deciding what should exist costs exactly what it always
+did. The gap between those two rates fills with un-made decisions wearing the
+costume of code. Every individual piece looks locally plausible. The damage
+only shows in aggregate: in the seams, in the sixth month, in the incident
+review.
+
+So the question behind every finding here is:
+
+    Was this complexity deliberately chosen, integrated with what already
+    exists in this repository, and could a maintainer explain and own it?
+
+Report:
+
+  Reinvention. The change writes something this repository already has. You
+  have the codebase — go and check, then cite the existing helper by
+  path:line. This is the single most valuable thing you can find.
+
+  Inconsistency. It does something a different way from the rest of the
+  codebase for no stated reason: a second error-handling idiom, a second date
+  format, a second way to fetch, a second state pattern, naming that matches
+  nothing around it. A product that reads as though it were built by strangers
+  who never met gets that way one plausible inconsistency at a time.
+
+  Structural asymmetry. A sibling path does something this one does not — an
+  authorisation check, validation, a transaction, a rate limit, cleanup on the
+  error path. This is not a style problem. The most expensive failures live
+  here, because the code is not wrong, the pattern is simply absent. Cite the
+  sibling that has it.
+
+  Unrequested abstraction. An interface with one implementation, a factory for
+  one product, a config option for a value that never changes, a wrapper called
+  once, scaffolding for a future that has not arrived. Ask what would break if
+  it were inlined. If the answer is nothing, that is the finding.
+
+  A dependency reached for too early. A new package for something the standard
+  library, an already-installed dependency, or the platform does natively. Also
+  flag a package you cannot confirm exists — a plausible-looking name that no
+  one can verify is a known supply-chain attack surface, not a typo.
+
+  Volume without weight. Many lines doing little: blocks duplicated with one
+  value changed, a hand-rolled version of a language feature, defensive layers
+  guarding against nothing reachable, code that is dead on arrival.
+
+  Tests that cannot fail. A test that mocks the very thing it claims to test,
+  asserts on its own fixture, or would still pass with the feature deleted.
+  Say which of those it is.
+
+  Negative space. What a change of this kind normally carries and this one does
+  not: the error state, the empty state, pagination, a limit on something
+  metered, the cleanup path.
+
+The following are correct as they stand. Reporting one as slop is itself a
+review defect:
+
+  * Input validation at a trust boundary, error handling that prevents data
+    loss, security controls, and accessibility basics. These are load-bearing.
+    Simplicity is never a reason to remove them.
+  * A shortcut that carries a comment naming its own ceiling and upgrade path,
+    such as \`// ponytail: global lock, per-account if throughput matters\`.
+    That is a decision, recorded — the opposite of slop.
+  * Code that is merely longer, newer, or less familiar than you would have
+    written yourself.
+  * A stated, deliberate exception to a convention.
+  * Anything whose only fault is that you would have named it differently.`,
+
+  admission: `Every finding here must cite the thing it is measured against — the existing
+helper, the sibling that has the check, the convention it breaks — with a path
+and a line drawn from the codebase context you were given. Keep a finding only
+when all of these hold:
+
+  1. You can name the specific existing code it should have used, matched, or
+     been consistent with, and you have its location.
+  2. You checked that this thing actually exists, rather than assuming a
+     codebase like this one would have it.
+  3. You can say in one sentence what to do instead: reuse X, match Y, inline
+     Z, delete it.
+  4. It is not one of the load-bearing categories listed above.
+
+A finding without that comparison is an opinion, and opinions are the failure
+mode of this review. Discard it.
+
+severity here:
+  high    a structural asymmetry with security or data-integrity consequences
+  medium  reinvention of something that already exists, or a test that cannot fail
+  low     inconsistency with an established convention, unrequested abstraction
+  nit     naming and clarity`,
+};
+
+/**
  * How hard to look. Every value here is only a default — an explicit input
  * always wins, so `depth: thorough` with `refute-votes: 1` does what it says.
  */
@@ -122,6 +225,54 @@ export const DEPTH_PRESETS = {
     agentTurns: 28,
   },
 };
+
+/**
+ * Parse the `panel` input: blank-line-separated blocks of `key: value`.
+ *
+ *     model: gpt-5.6
+ *     base-url: https://api.openai.com/v1
+ *     api-key: ${{ secrets.OPENAI_KEY }}
+ *
+ *     model: claude-sonnet-4-5
+ *     api-key: ${{ secrets.ANTHROPIC_KEY }}
+ *
+ * It reads as YAML because it sits in a YAML file, but it is parsed as lines,
+ * so the action stays dependency-free. Anything a block leaves out is
+ * inherited from the lead model, which makes a second model on the same
+ * provider a one-line entry.
+ *
+ * @returns {{model: string, baseUrl: string, apiKey: string, label: string}[]}
+ */
+export function parsePanel(text, lead) {
+  const blocks = String(text || '')
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+
+  return blocks.map((block, i) => {
+    /** @type {Record<string, string>} */
+    const fields = {};
+    for (const line of block.split('\n')) {
+      const trimmed = line.trim().replace(/^-\s*/, '');
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const at = trimmed.indexOf(':');
+      if (at === -1) throw new Error(`Panel entry ${i + 1} has a line that is not "key: value": ${trimmed}`);
+      fields[trimmed.slice(0, at).trim().toLowerCase()] = trimmed.slice(at + 1).trim();
+    }
+
+    const model = fields.model || fields.name;
+    if (!model) throw new Error(`Panel entry ${i + 1} is missing "model".`);
+    const apiKey = fields['api-key'] || fields.key || lead.apiKey;
+    if (!apiKey) throw new Error(`Panel entry ${i + 1} has no api-key and the lead model has none to inherit.`);
+
+    return {
+      model,
+      baseUrl: (fields['base-url'] || fields.url || lead.baseUrl).replace(/\/+$/, ''),
+      apiKey,
+      label: fields.label || model,
+    };
+  });
+}
 
 export function readConfig() {
   const apiKey = core.getInput('api-key');
@@ -171,10 +322,18 @@ export function readConfig() {
   if (!githubToken) throw new Error('Input "github-token" is required.');
   core.mask(githubToken);
 
+  const baseUrl = core.getInput('base-url', 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const lead = { model, baseUrl, apiKey, label: core.getInput('model-label', model) };
+  const panel = [lead, ...parsePanel(core.getInput('panel', ''), lead)];
+  // Every panel key is a secret, including ones inherited from the lead.
+  for (const member of panel) core.mask(member.apiKey);
+
   return {
     apiKey,
     model,
-    baseUrl: core.getInput('base-url', 'https://api.openai.com/v1').replace(/\/+$/, ''),
+    baseUrl,
+    panel,
+    taste: core.getBool('taste', true),
     githubToken,
     prNumber: core.getNumber('pr-number', 0) || null,
     triggerPhrase: core.getInput('trigger-phrase', '@commitreview'),

@@ -48,7 +48,7 @@ message.`;
 /**
  * @returns {Promise<string>} markdown to post as a reply
  */
-export async function answer(llm, { repo, files, diffText, pr, conversation, question, thread, config }) {
+export async function answer(llm, { repo, diffText, pr, conversation, question, thread, config }) {
   const discussion = renderConversation(conversation, { maxChars: 16000 });
 
   const threadContext = thread
@@ -82,7 +82,6 @@ Answer them.`;
     system: SYSTEM,
     user,
     repo,
-    files,
     config,
     turns: config.agentTurns,
     closing: 'Answer now, from what you have. Say what you could not determine.',

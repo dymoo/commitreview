@@ -23,5 +23,6 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm install --no-audit --no-fund
       - run: npm run format:check
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm test

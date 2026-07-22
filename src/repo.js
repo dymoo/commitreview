@@ -55,12 +55,14 @@ async function tarballRepo(gh, owner, repo, sha) {
   const root = path.join(dir, top.name);
   core.info(`Repository archive extracted (${Math.round(size / 1024)} KiB).`);
 
-  let cache = null;
+  // Cache the promise, not the result: two concurrent callers must share one
+  // walk rather than both starting their own.
+  let listing = null;
   return {
     kind: 'archive',
-    async list() {
-      if (!cache) cache = await walk(root, root);
-      return cache;
+    list() {
+      if (!listing) listing = walk(root, root);
+      return listing;
     },
     async read(rel) {
       // Never let a path escape the extracted root.
@@ -96,16 +98,18 @@ async function walk(root, dir, out = []) {
 
 /** Fallback when the archive is unavailable: one tree call, then a fetch per file. */
 function apiRepo(gh, owner, repo, sha) {
-  let cache = null;
+  let listing = null;
   const contents = new Map();
   return {
     kind: 'api',
-    async list() {
-      if (cache) return cache;
-      const tree = await gh.getTree(owner, repo, sha);
-      if (tree.truncated) core.warning('Repository tree was truncated by the API; context may be incomplete.');
-      cache = (tree.tree || []).filter((n) => n.type === 'blob').map((n) => n.path);
-      return cache;
+    list() {
+      if (!listing) {
+        listing = gh.getTree(owner, repo, sha).then((tree) => {
+          if (tree.truncated) core.warning('Repository tree was truncated by the API; context may be incomplete.');
+          return (tree.tree || []).filter((n) => n.type === 'blob').map((n) => n.path);
+        });
+      }
+      return listing;
     },
     async read(rel) {
       if (!contents.has(rel)) contents.set(rel, await gh.getFileContent(owner, repo, rel, sha));

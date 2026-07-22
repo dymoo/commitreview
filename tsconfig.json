@@ -8,6 +8,11 @@
     "checkJs": true,
     "noEmit": true,
     "strict": false,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "types": ["node"]
   },

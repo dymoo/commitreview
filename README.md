@@ -8,7 +8,9 @@ as inline comments. Ask it a question and it answers in the thread. It runs in
 your own GitHub Actions runner, on your own API key, and nothing goes anywhere
 you did not send it.
 
+- **Catches vibe slop.** A dedicated taste pass looks for what linters and defect reviewers both miss: code that reinvents what you already have, patterns applied unevenly, an auth check present in one path and absent in its sibling, abstractions nobody asked for. [What that means →](#the-taste-pass-vibe-slop-and-restraint)
 - **Reviews the codebase, not just the diff.** It reads the repository at the head commit — the definitions of what your change calls, the callers of what your change modified, and the project's own `AGENTS.md` / `CLAUDE.md` rules.
+- **Ask several labs at once.** Run the same review across models from different labs; each finding is cross-checked by a model that did not find it, and the lead model reconciles the result. [Panel review →](#panel-review-several-labs-one-review)
 - **Talk to it.** `@commitreview why would that deadlock?` gets an answer. Reply to one of its comments and it replies in that thread.
 - **Any OpenAI-compatible endpoint.** OpenAI, OpenRouter, Ollama, Together, Groq, DeepSeek, vLLM, llama.cpp, Anthropic, Azure. One `base-url` + `model` + `api-key`.
 - **No service, no app to install, no third party.** Your key, your runner, your source code.
@@ -94,6 +96,124 @@ and it will tell you if you are right.
 The bot reacts 👀 when it picks a request up. Because it posts with
 `GITHUB_TOKEN`, its own comments cannot re-trigger the workflow — there is no
 self-review loop.
+
+---
+
+## The taste pass: vibe slop, and restraint
+
+Most review tools ask "is this correct?". That question misses the thing that
+actually degrades a codebase, because slop is never locally wrong. Every piece
+is individually plausible — a button that works, an endpoint that responds. The
+damage only shows in aggregate: in the seams, in the sixth month, in the
+incident review.
+
+**Vibe slop is what accumulates when the cost of generating software collapses
+to near zero while the cost of deciding — what to build, why, and how it coheres
+— does not.** A model emits a couple of thousand lines from one prompt; a person
+makes a handful of genuinely good architectural decisions in a day. When
+generation outruns judgement by three orders of magnitude, the gap fills with
+un-made decisions wearing the costume of code.
+
+It shows up in layers, and only the third is what people usually mean by "code
+quality":
+
+| Layer            | What it looks like                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Product**      | Features added because they were promptable, not needed. No kill criteria, no prioritisation.                |
+| **UX**           | Every session invents its own conventions. Four button styles, three date formats.                           |
+| **Code**         | Duplicated logic instead of reuse, dead code never removed, a thousand lines where a hundred would do.       |
+| **Architecture** | No coherent data model. Security checks present in some paths and absent in structurally identical siblings. |
+| **Epistemic**    | Nobody alive understands the system. Every future change is archaeology.                                     |
+
+The diagnostic question is never _"did an AI write this?"_ — a reviewed,
+well-specified 5,000-line generated patch can be sound, and fifty unjustified
+hand-written lines can be slop. It is:
+
+> **Was this complexity deliberately chosen, independently verified, integrated
+> with the surrounding system, and accepted by someone able to own its
+> consequences?**
+
+The taste pass asks exactly that, and it is the reason the action reads your
+whole repository rather than just the diff — you cannot detect reinvention,
+inconsistency or a missing sibling check from a diff alone.
+
+**What it reports:** reinvention of code that already exists (cited by
+`path:line`), inconsistency with the conventions around it, structural
+asymmetry where a sibling path has a check this one lacks, unrequested
+abstractions, a dependency reached for before the standard library, tests that
+would still pass with the feature deleted, and negative space — the error state
+or the rate limit that a change like this normally carries and this one does not.
+
+**What it will never report**, because getting this wrong is worse than saying
+nothing: input validation at a trust boundary, error handling that prevents data
+loss, security controls, and accessibility basics. Simplicity is never a reason
+to remove those. Nor will it flag a shortcut that already records its own
+ceiling — a comment like `// ponytail: global lock, per-account if throughput
+matters` is a decision, and the opposite of slop.
+
+Every taste finding is judged by its own skeptic, because the defect skeptic
+("can you name the input that triggers a crash?") would destroy all of them by
+construction. The taste skeptic asks a different question: does the thing you
+cite actually exist, and is the convention you claim really the convention here?
+
+The restraint half of this pass condenses the
+[ponytail rules by Dietrich Gebert](https://github.com/dietrichgebert/ponytail) —
+a lazy-senior-developer ladder that stops at the first rung that holds: does this
+need to exist, is it already in the codebase, does the standard library do it,
+does the platform do it natively, can it be one line. Used with credit and worth
+reading in full.
+
+It is on by default. Turn it off with `taste: false`.
+
+---
+
+## Panel review: several labs, one review
+
+Models from different labs fail differently. Asking one model twice mostly gets
+you the same blind spot twice; asking two labs gets you two different ones.
+
+```yaml
+with:
+  api-key: ${{ secrets.OPENROUTER_KEY }}
+  base-url: https://openrouter.ai/api/v1
+  model: moonshotai/kimi-k3 # the lead: it reconciles everything at the end
+
+  panel: |
+    model: gpt-5.6
+    base-url: https://api.openai.com/v1
+    api-key: ${{ secrets.OPENAI_KEY }}
+
+    model: claude-sonnet-4-5
+    base-url: https://api.anthropic.com/v1
+    api-key: ${{ secrets.ANTHROPIC_KEY }}
+```
+
+Blank-line-separated blocks of `key: value`, accepting `model`, `base-url`,
+`api-key` and `label`. Anything a block leaves out is inherited from the lead, so
+a second model on the same provider is one line:
+
+```yaml
+panel: |
+  model: moonshotai/kimi-k3-thinking
+```
+
+What happens:
+
+1. **Every model reviews independently**, running the full set of passes.
+2. **Findings are merged.** When two labs land on the same finding, that is
+   recorded rather than deduplicated away — you will see _found independently by
+   kimi-k3 and gpt-5.6_ on the comment, which is the strongest signal a panel
+   produces.
+3. **Each finding is cross-checked by a model that did not find it.** A critic
+   from the same family shares the author's blind spots; one from another lab
+   does not.
+4. **The lead model reconciles.** It merges near-duplicates the key-based merge
+   missed, drops what contradicts better evidence, and ranks the result. It can
+   reword and re-rank but **never relocate** — `path`, `line` and `side` come
+   from the diff and no model is allowed to touch them.
+
+Cost scales linearly with panel size: three models is roughly three reviews plus
+one synthesis call.
 
 ---
 
@@ -401,11 +521,14 @@ review only on demand, drop the `pull_request_target` trigger and use mentions.
 ```bash
 npm install
 npm test          # node:test, no network
-npm run check-all # format check, typecheck, tests
+npm run check-all # format, lint, typecheck, tests
 ```
 
-`src/` is plain ESM with JSDoc types, checked by `tsc --checkJs`. No runtime
-dependencies and no build step: `action.yml` runs `src/index.js` directly.
+`src/` is plain ESM with JSDoc types. With no build step there is no compiler to
+lean on, so the checks are assembled explicitly: Prettier for formatting, ESLint
+for correctness and JSDoc validity, and `tsc --checkJs` reading those JSDoc
+annotations as real types. No runtime dependencies — `action.yml` runs
+`src/index.js` directly.
 
 | File              | Responsibility                                        |
 | ----------------- | ----------------------------------------------------- |
@@ -422,9 +545,22 @@ dependencies and no build step: `action.yml` runs `src/index.js` directly.
 | `src/review.js`   | Prompts, find pass, refute pass                       |
 | `src/post.js`     | Fingerprinting, dedupe, comment and summary rendering |
 
+Conventions, invariants and the rules this repository enforces on itself are in
+[AGENTS.md](AGENTS.md) — which commitreview reads when reviewing its own pull
+requests, so it is worth keeping honest.
+
 Issues and pull requests welcome. If you are changing anchoring, chunking or
 JSON extraction, add a case to the tests — those three are where this class of
 tool breaks.
+
+## Credits
+
+The restraint half of the taste pass condenses the
+[ponytail rules by Dietrich Gebert](https://github.com/dietrichgebert/ponytail).
+
+The adversarial structure — kill mandates, context asymmetry between verifiers,
+and cross-model critics — follows the refute-or-promote literature on
+high-precision LLM defect discovery.
 
 ## License
 

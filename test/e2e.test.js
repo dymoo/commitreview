@@ -127,7 +127,9 @@ async function stubServer({ llmReply, rejectTools = false, repoFiles = REPO_FILE
     });
   });
 
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(null)));
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(null));
+  });
   const address = /** @type {import('node:net').AddressInfo} */ (server.address());
   return { server, captured, port: address.port };
 }
@@ -166,7 +168,9 @@ async function runAction(port, extraInputs = {}) {
   let stderr = '';
   child.stdout.on('data', (c) => (stdout += c));
   child.stderr.on('data', (c) => (stderr += c));
-  const code = await new Promise((r) => child.on('close', r));
+  const code = await new Promise((resolve) => {
+    child.on('close', resolve);
+  });
 
   return { code, stdout, stderr, tmp, outputs: parseOutputs(fs.readFileSync(outputPath, 'utf8')) };
 }
