@@ -1,0 +1,151 @@
+name: commitreview
+description: Adversarial AI code review on pull requests. Bring your own key — any OpenAI-compatible endpoint.
+author: commitreview contributors
+
+branding:
+  icon: git-pull-request
+  color: purple
+
+inputs:
+  api-key:
+    description: API key for the OpenAI-compatible endpoint. Pass a secret, never a literal.
+    required: true
+  base-url:
+    description: Base URL of the OpenAI-compatible API, including the version path (e.g. https://openrouter.ai/api/v1).
+    required: false
+    default: https://api.openai.com/v1
+  model:
+    description: Model id to review with (e.g. glm-4.6, gpt-5.1, anthropic/claude-sonnet-4.5).
+    required: true
+
+  github-token:
+    description: Token used to read the PR and post comments. Needs pull-requests:write.
+    required: false
+    default: ${{ github.token }}
+  pr-number:
+    description: Pull request number. Inferred from the triggering event when omitted.
+    required: false
+  trigger-phrase:
+    description: Phrase that triggers a review from an issue_comment event.
+    required: false
+    default: '@commitreview'
+  allowed-associations:
+    description: >-
+      Comma-separated author associations allowed to trigger a review by comment.
+      Set to ANY to disable the gate (not recommended on public repos — it lets
+      strangers spend your API key).
+    required: false
+    default: OWNER,MEMBER,COLLABORATOR
+
+  include:
+    description: Newline-separated globs. When set, only matching files are reviewed.
+    required: false
+    default: ''
+  ignore:
+    description: Newline-separated globs to skip, added on top of the built-in ignore list.
+    required: false
+    default: ''
+  use-default-ignores:
+    description: Skip lockfiles, build output, vendored code, snapshots and binaries.
+    required: false
+    default: 'true'
+
+  max-files:
+    description: Maximum number of changed files to review.
+    required: false
+    default: '60'
+  max-file-bytes:
+    description: Skip surrounding-context expansion for files larger than this. The diff itself is still reviewed.
+    required: false
+    default: '400000'
+  context-lines:
+    description: Lines of surrounding source shown around each hunk. 0 uses the raw diff context only.
+    required: false
+    default: '20'
+  max-input-tokens:
+    description: Approximate ceiling on diff tokens sent across the whole review.
+    required: false
+    default: '120000'
+  chunk-tokens:
+    description: Approximate ceiling on diff tokens per model request.
+    required: false
+    default: '30000'
+  concurrency:
+    description: Maximum in-flight model requests.
+    required: false
+    default: '4'
+
+  max-findings:
+    description: Keep at most this many findings before verification and posting.
+    required: false
+    default: '25'
+  min-severity:
+    description: Lowest severity to post — one of critical, high, medium, low, nit.
+    required: false
+    default: low
+  refute:
+    description: Run an adversarial pass that tries to disprove each finding before posting it.
+    required: false
+    default: 'true'
+  refute-votes:
+    description: Independent refutation attempts per finding. A finding survives on a majority.
+    required: false
+    default: '1'
+  instructions:
+    description: Extra review guidance appended to the system prompt (project conventions, focus areas).
+    required: false
+    default: ''
+
+  inline-comments:
+    description: Post findings as inline review comments. When false everything goes in the summary.
+    required: false
+    default: 'true'
+  summary-mode:
+    description: sticky updates one comment in place, new posts a fresh comment each run, off skips it.
+    required: false
+    default: sticky
+  suggestions:
+    description: Render model-provided fixes as committable GitHub suggestion blocks.
+    required: false
+    default: 'true'
+  fail-on:
+    description: Fail the step when a finding at or above this severity survives — critical, high, medium, low, nit or none.
+    required: false
+    default: none
+  dry-run:
+    description: Do everything except write to the pull request.
+    required: false
+    default: 'false'
+
+  temperature:
+    description: Sampling temperature. Dropped automatically if the model rejects it.
+    required: false
+    default: '0.1'
+  max-output-tokens:
+    description: Maximum tokens per model response.
+    required: false
+    default: '8000'
+  json-mode:
+    description: >-
+      Send response_format=json_object — on, off, or auto to try it and fall back
+      when the endpoint rejects it.
+    required: false
+    default: auto
+  request-timeout:
+    description: Per-request timeout in seconds.
+    required: false
+    default: '180'
+
+outputs:
+  findings:
+    description: Number of findings posted.
+  findings-json:
+    description: Path to a JSON file with the full findings payload.
+  summary:
+    description: The markdown summary that was posted.
+  reviewed:
+    description: 'true when a review ran, false when the trigger conditions were not met.'
+
+runs:
+  using: node20
+  main: src/index.js

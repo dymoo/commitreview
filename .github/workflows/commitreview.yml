@@ -1,0 +1,36 @@
+# commitreview reviewing commitreview. Uses the action from this checkout, so a
+# pull request is reviewed by the version it is proposing.
+name: commitreview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: commitreview-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, '@commitreview'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          api-key: ${{ secrets.LLM_API_KEY }}
+          base-url: ${{ vars.LLM_BASE_URL || 'https://openrouter.ai/api/v1' }}
+          model: ${{ vars.LLM_MODEL || 'z-ai/glm-4.6' }}
+          instructions: |
+            This action has no runtime dependencies — flag any import that is not
+            from node: or a relative path.
+            Anchoring, chunking and JSON extraction are the load-bearing parts.
+            A change to any of them without a test is a finding.

@@ -1,0 +1,34 @@
+# Use the review as a required status check: three independent skeptics must
+# agree a finding is real, and anything high or worse fails the job.
+#
+# pull_request (not pull_request_target) means fork PRs get a read-only token and
+# no secrets, so this variant reviews branches in your own repository only.
+name: commitreview (blocking)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: commitreview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dymoo/commitreview@v1
+        with:
+          api-key: ${{ secrets.LLM_API_KEY }}
+          base-url: https://api.openai.com/v1
+          model: gpt-5.1
+          min-severity: medium
+          refute-votes: 3
+          fail-on: high
+          instructions: |
+            Money is stored as integer minor units. Flag float arithmetic on money.
+            Every webhook handler must be idempotent. Flag any that are not.

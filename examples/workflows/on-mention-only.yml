@@ -1,0 +1,24 @@
+# Review only when asked. Nothing runs until someone comments @commitreview on a
+# pull request, which keeps spend proportional to how much you actually want.
+name: commitreview
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '@commitreview')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dymoo/commitreview@v1
+        with:
+          api-key: ${{ secrets.LLM_API_KEY }}
+          base-url: https://ollama.com/v1
+          model: glm-4.6
+          # Text after the trigger phrase is passed to the model as a focus
+          # instruction, e.g. "@commitreview check the migration for data loss".

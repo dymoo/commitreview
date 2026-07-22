@@ -1,0 +1,23 @@
+{
+  "name": "commitreview",
+  "version": "1.0.0",
+  "description": "Bring-your-own-key AI code review as a GitHub Action. Works with any OpenAI-compatible endpoint.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check-all": "npm run format:check && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  }
+}
