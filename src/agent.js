@@ -139,7 +139,12 @@ export async function runTool(name, args, { repo, config }) {
 
     if (name === 'read_file') {
       if (!args.path) return toolError('path is required');
-      if (matchAny(args.path, config.ignore)) return toolError(`${args.path} is excluded from review by configuration`);
+      // Normalise before testing the ignore list: `./x` and `a/../x` must not
+      // be a way past an exclusion that `x` would have hit.
+      const requested = normalisePath(args.path);
+      if (!requested) return toolError(`${args.path} is not a repository-relative path`);
+      if (matchAny(requested, config.ignore)) return toolError(`${requested} is excluded from review by configuration`);
+      args = { ...args, path: requested };
       const content = await repo.read(args.path);
       if (content === null) return toolError(`${args.path} does not exist at this commit`);
       const lines = content.split('\n');
@@ -195,6 +200,21 @@ export async function runTool(name, args, { repo, config }) {
   } catch (err) {
     return toolError(`tool failed: ${err.message}`);
   }
+}
+
+/** Collapse `.` and `..` segments, or return null if the path escapes. */
+export function normalisePath(p) {
+  const out = [];
+  for (const segment of String(p || '').split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      if (!out.length) return null;
+      out.pop();
+      continue;
+    }
+    out.push(segment);
+  }
+  return out.length ? out.join('/') : null;
 }
 
 function parseArgs(raw) {

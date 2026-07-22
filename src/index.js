@@ -41,6 +41,13 @@ async function main() {
   const files = parseDiff(diffText);
   const { selected, skipped } = selectFiles(files, config);
 
+  // Everything downstream sees only the selected files. The raw diff still
+  // contains whatever `ignore` excluded, and it must never reach a prompt.
+  const filteredDiff = selected
+    .flatMap((file) => renderFile(file, null, { ...config, contextLines: 0 }))
+    .map((block) => block.text)
+    .join('\n\n');
+
   // Reading the repository is one request and everything downstream benefits.
   const repo = await openRepo(gh, { owner: ctx.owner, repo: ctx.repo, sha: pr.head.sha, config });
   const panel = config.panel.map((member) => new LLM({ ...config, ...member }));
@@ -49,7 +56,7 @@ async function main() {
 
   // A mention carrying an actual question is a conversation, not a review.
   if (ctx.trigger === 'mention' && !isReviewRequest(ctx.focus)) {
-    return runChat({ config, ctx, gh, llm, pr, conversation, repo, diffText });
+    return runChat({ config, ctx, gh, llm, pr, conversation, repo, diffText: filteredDiff });
   }
 
   core.info(`Reviewing ${ctx.owner}/${ctx.repo}#${ctx.prNumber} with ${config.model} (depth: ${config.depth})`);
@@ -90,7 +97,7 @@ async function main() {
   );
   for (const d of dropped) core.warning(`Not reviewed: ${d.path} — ${d.reason}`);
 
-  const codebase = await gatherContext({ llm, repo, selected, diffText, pr, config });
+  const codebase = await gatherContext({ llm, repo, selected, diffText: filteredDiff, pr, config });
 
   const byPath = new Map();
   for (const block of rendered) byPath.set(block.path, `${byPath.get(block.path) || ''}\n\n${block.text}`);
@@ -228,12 +235,16 @@ async function main() {
   const jsonPath = path.join(process.env.RUNNER_TEMP || process.cwd(), 'commitreview-findings.json');
   fs.writeFileSync(jsonPath, JSON.stringify({ findings: [...posted, ...demoted], skipped, dropped }, null, 2));
   core.setOutput('reviewed', 'true');
-  core.setOutput('findings', String(posted.length + demoted.length));
+  core.setOutput('findings', String(findings.length));
+  core.setOutput('new-findings', String(posted.length + demoted.length));
   core.setOutput('findings-json', jsonPath);
   core.setOutput('summary', summaryMarkdown);
 
   if (config.failOn !== 'none') {
-    const worst = [...posted, ...demoted].filter((f) => severityRank(f.severity) <= severityRank(config.failOn));
+    // Every surviving finding, not just the ones new to this run: a finding
+    // already commented on has not gone away, and a merge gate that passes on
+    // the second run is not a gate.
+    const worst = findings.filter((f) => severityRank(f.severity) <= severityRank(config.failOn));
     if (worst.length) core.setFailed(`${worst.length} finding(s) at or above severity "${config.failOn}".`);
   }
 }

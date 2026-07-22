@@ -30,6 +30,31 @@ test('ignores reasoning-model think blocks', () => {
   assert.deepEqual(extractJson('<think>hmm {"trap": true} maybe</think>\n{"a":3}'), { a: 3 });
 });
 
+test('a fence ending inside a JSON string does not truncate the answer', () => {
+  // The fence regex is lazy, so a ``` inside a finding body ends the capture
+  // early. Recovering from that capture would produce a plausible, wrong object.
+  const reply = '```json\n{"summary":"ok","findings":[{"title":"A","body":"use ```js x ```"},{"title":"B"}]}\n```';
+  const parsed = extractJson(reply);
+  assert.equal(parsed.findings.length, 2, 'the second finding must not be silently dropped');
+  assert.equal(parsed.findings[0].body, 'use ```js x ```');
+});
+
+test('a bracket in the preamble is not mistaken for the answer', () => {
+  // Anchoring on the first bracket returned `{}` or `[0]` as the whole review.
+  assert.deepEqual(extractJson('The empty object {} case is odd. Review:\n{"findings":[{"title":"real"}]}'), {
+    findings: [{ title: 'real' }],
+  });
+  assert.deepEqual(extractJson('See config[0] handling.\n{"findings":[{"title":"real"}]}'), {
+    findings: [{ title: 'real' }],
+  });
+});
+
+test('a truncated answer is recovered even behind a decoy bracket', () => {
+  const parsed = extractJson('The {} case.\n{"findings":[{"title":"leak"},{"title":"race"');
+  assert.equal(parsed.findings.length, 2);
+  assert.equal(parsed.findings[1].title, 'race');
+});
+
 test('recovers output truncated by a token limit', () => {
   const truncated = '{"findings":[{"title":"leak","severity":"high"},{"title":"race"';
   const parsed = extractJson(truncated);
@@ -85,6 +110,17 @@ test('json-mode on is never dropped behind the user’s back', () => {
 test('json-mode off never sends response_format', () => {
   const llm = new LLM({ ...base, jsonMode: 'off' });
   assert.equal(llm.buildBody([]).response_format, undefined);
+});
+
+test('a concurrent adaptation is retried rather than adapted twice', () => {
+  // Several requests are in flight on one client. If two hit the same
+  // rejection, the second must not strip an unrelated parameter as collateral.
+  const llm = new LLM(base);
+  const before = llm.quirksVersion;
+  llm.adapt('Unsupported parameter: response_format');
+  assert.notEqual(llm.quirksVersion, before, 'a real adaptation bumps the version');
+  assert.equal(llm.quirks.jsonMode, false);
+  assert.equal(llm.quirks.temperature, true, 'an unrelated quirk is untouched');
 });
 
 test('adaptation eventually gives up instead of looping', () => {

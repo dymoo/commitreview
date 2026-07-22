@@ -187,7 +187,9 @@ inputs:
 
 outputs:
   findings:
-    description: Number of findings posted.
+    description: Number of findings that survived verification, whether or not they were new this run.
+  new-findings:
+    description: Number of findings posted this run, excluding ones already commented on.
   findings-json:
     description: Path to a JSON file with the full findings payload.
   summary:

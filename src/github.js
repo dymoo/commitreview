@@ -1,4 +1,5 @@
 import * as core from './core.js';
+import { isSafeRepoPath } from './repo.js';
 
 const USER_AGENT = 'commitreview';
 
@@ -105,6 +106,12 @@ export class GitHub {
 
   /** Raw file content at a ref, or null when it does not exist there. */
   async getFileContent(owner, repo, path, ref) {
+    // encodeURIComponent leaves `..` intact and the URL parser then collapses
+    // it, turning a file read into an arbitrary authenticated GET.
+    if (!isSafeRepoPath(path)) {
+      core.warning(`Refusing to fetch "${path}": not a repository-relative path.`);
+      return null;
+    }
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     try {
       const { data } = await this.request(

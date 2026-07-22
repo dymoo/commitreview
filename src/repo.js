@@ -22,6 +22,19 @@ import * as core from './core.js';
 const MAX_TARBALL_BYTES = 300 * 1024 * 1024;
 
 /**
+ * Reject anything that is not a plain repository-relative path.
+ *
+ * Both backends need this and for different reasons: the archive reader would
+ * otherwise resolve out of its root, and the API reader builds a URL, where the
+ * WHATWG parser silently collapses `..` into a different API endpoint.
+ */
+export function isSafeRepoPath(p) {
+  if (typeof p !== 'string' || p === '') return false;
+  if (p.startsWith('/') || p.includes('\\') || p.includes('\0')) return false;
+  return !p.split('/').some((segment) => segment === '..' || segment === '.' || segment === '');
+}
+
+/**
  * @typedef {object} Repo
  * @property {string} kind
  * @property {() => Promise<string[]>} list repository-relative paths
@@ -52,7 +65,10 @@ async function tarballRepo(gh, owner, repo, sha) {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
   const top = entries.find((e) => e.isDirectory());
   if (!top) throw new Error('archive contained no directory');
-  const root = path.join(dir, top.name);
+  // Resolve the root itself once: the temp directory is commonly reached
+  // through a symlink (/tmp and /var on macOS), so comparing a resolved file
+  // path against an unresolved root would reject every read.
+  const root = await fsp.realpath(path.join(dir, top.name));
   core.info(`Repository archive extracted (${Math.round(size / 1024)} KiB).`);
 
   // Cache the promise, not the result: two concurrent callers must share one
@@ -65,11 +81,19 @@ async function tarballRepo(gh, owner, repo, sha) {
       return listing;
     },
     async read(rel) {
-      // Never let a path escape the extracted root.
+      if (!isSafeRepoPath(rel)) return null;
       const full = path.resolve(root, rel);
       if (!full.startsWith(root + path.sep)) return null;
       try {
-        return await fsp.readFile(full, 'utf8');
+        // A lexical check is not enough: readFile follows symlinks, and a pull
+        // request can add one pointing at /proc/self/environ, which holds this
+        // job's API keys. Resolve the link and re-check before reading.
+        const real = await fsp.realpath(full);
+        if (real !== root && !real.startsWith(root + path.sep)) {
+          core.warning(`Refusing to read ${rel}: it resolves outside the repository.`);
+          return null;
+        }
+        return await fsp.readFile(real, 'utf8');
       } catch {
         return null;
       }
@@ -112,6 +136,7 @@ function apiRepo(gh, owner, repo, sha) {
       return listing;
     },
     async read(rel) {
+      if (!isSafeRepoPath(rel)) return null;
       if (!contents.has(rel)) contents.set(rel, await gh.getFileContent(owner, repo, rel, sha));
       return contents.get(rel);
     },

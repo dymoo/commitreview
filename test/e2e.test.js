@@ -43,13 +43,19 @@ const FINDINGS = {
 };
 
 /** A real gzipped tar laid out the way GitHub's tarball endpoint lays one out. */
-function makeTarball(files) {
+function makeTarball(files, symlinks = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commitreview-src-'));
   const top = 'o-r-headsha';
   for (const [rel, content] of Object.entries(files)) {
     const full = path.join(dir, top, rel);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content);
+  }
+  // GitHub's tarball preserves symlinks verbatim, so the test archive must too.
+  for (const [rel, target] of Object.entries(symlinks)) {
+    const full = path.join(dir, top, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.symlinkSync(target, full);
   }
   const archive = path.join(dir, 'repo.tar.gz');
   execFileSync('tar', ['-czf', archive, '-C', dir, top]);
@@ -63,9 +69,9 @@ const REPO_FILES = {
 };
 
 /** Serves both APIs and records everything it was asked to write. */
-async function stubServer({ llmReply, rejectTools = false, repoFiles = REPO_FILES }) {
+async function stubServer({ llmReply, rejectTools = false, repoFiles = REPO_FILES, symlinks = {} }) {
   const captured = { reviews: [], issueComments: [], llmRequests: [] };
-  const tarball = makeTarball(repoFiles);
+  const tarball = makeTarball(repoFiles, symlinks);
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -444,6 +450,38 @@ test('a malformed panel fails the run rather than quietly reviewing with one mod
   const run = await runAction(port, { INPUT_PANEL: 'base-url: https://example.invalid/v1' });
   assert.equal(run.code, 1);
   assert.match(run.stdout, /missing "model"/);
+});
+
+test('a symlink in the pull request cannot read outside the repository', async (t) => {
+  // A fork PR that adds `src/notes.js -> /etc/passwd` (or /proc/self/environ,
+  // which on a runner holds this job's API keys) must not pull that file into
+  // the review. The lexical containment check alone did not stop it, because
+  // readFile follows symlinks.
+  const outside = path.join(os.tmpdir(), `commitreview-secret-${process.pid}.txt`);
+  fs.writeFileSync(outside, 'API_KEY=super-secret-value');
+  t.after(() => fs.rmSync(outside, { force: true }));
+
+  const { server, port } = await stubServer({
+    llmReply: () => '{"findings":[]}',
+    symlinks: { 'src/leak.js': outside },
+  });
+  t.after(() => server.close());
+
+  const { openRepo } = await import('../src/repo.js');
+  const { GitHub } = await import('../src/github.js');
+  const gh = new GitHub('t', { apiUrl: `http://127.0.0.1:${port}` });
+  const repo = await openRepo(gh, {
+    owner: 'o',
+    repo: 'r',
+    sha: 'headsha',
+    config: { repoContext: 'auto' },
+  });
+
+  assert.equal(await repo.read('src/leak.js'), null, 'a symlink out of the repository reads as nothing');
+  assert.equal(await repo.read('../../../etc/passwd'), null);
+  assert.equal(await repo.read('src/../../escape.js'), null);
+  // A legitimate file in the same repository still reads normally.
+  assert.match(await repo.read('src/db.js'), /undefined when missing/);
 });
 
 test('an unrelated event is skipped without spending a request', async (t) => {
