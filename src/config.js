@@ -262,12 +262,25 @@ export function parsePanel(text, lead) {
 
     const model = fields.model || fields.name;
     if (!model) throw new Error(`Panel entry ${i + 1} is missing "model".`);
-    const apiKey = fields['api-key'] || fields.key || lead.apiKey;
+
+    const ownBaseUrl = fields['base-url'] || fields.url;
+    const ownKey = fields['api-key'] || fields.key;
+
+    // A key may only be inherited along with the endpoint it belongs to.
+    // Otherwise naming a second provider and forgetting its key would send the
+    // lead's credential to that provider — a silent disclosure, not a default.
+    if (ownBaseUrl && !ownKey && ownBaseUrl.replace(/\/+$/, '') !== lead.baseUrl) {
+      throw new Error(
+        `Panel entry ${i + 1} ("${model}") sets its own base-url but no api-key. ` +
+          `Inheriting the lead model's key would send it to ${ownBaseUrl}. Give this entry its own api-key.`,
+      );
+    }
+    const apiKey = ownKey || lead.apiKey;
     if (!apiKey) throw new Error(`Panel entry ${i + 1} has no api-key and the lead model has none to inherit.`);
 
     return {
       model,
-      baseUrl: (fields['base-url'] || fields.url || lead.baseUrl).replace(/\/+$/, ''),
+      baseUrl: (ownBaseUrl || lead.baseUrl).replace(/\/+$/, ''),
       apiKey,
       label: fields.label || model,
     };

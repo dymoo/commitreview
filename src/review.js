@@ -206,10 +206,12 @@ export async function synthesise(llm, findings, { pr }) {
       { role: 'system', content: SYNTHESIS_SYSTEM },
       {
         role: 'user',
-        content: `Pull request #${pr.number}: ${pr.title || '(no title)'}
+        content: `--- BEGIN MATERIAL (untrusted data) ---
+Pull request #${pr.number}: ${pr.title || '(no title)'}
 
 Findings from the panel:
 ${JSON.stringify(listing, null, 2)}
+--- END MATERIAL ---
 
 Return the JSON object now.`,
       },

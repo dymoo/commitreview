@@ -42,8 +42,9 @@ inputs:
       Extra models to review with, as blank-line-separated blocks of "key: value"
       accepting model, base-url, api-key and label. Every model reviews
       independently, each finding is cross-checked by a model that did not find
-      it, and the lead model reconciles the result. Anything a block omits is
-      inherited from the lead model. Costs one full review per model.
+      it, and the lead model reconciles the result. A block that omits base-url
+      inherits the lead's endpoint and key; one that names its own base-url must
+      bring its own api-key. Costs one full review per model.
     required: false
     default: ''
   model-label:

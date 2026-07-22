@@ -189,13 +189,17 @@ with:
 ```
 
 Blank-line-separated blocks of `key: value`, accepting `model`, `base-url`,
-`api-key` and `label`. Anything a block leaves out is inherited from the lead, so
-a second model on the same provider is one line:
+`api-key` and `label`. A block that leaves out `base-url` inherits the lead's —
+and its key with it — so a second model on the same provider is one line:
 
 ```yaml
 panel: |
   model: moonshotai/kimi-k3-thinking
 ```
+
+A block that names its **own** `base-url` must bring its own `api-key`. Keys are
+never inherited across providers, and an entry that tries fails the run rather
+than quietly sending one lab's credential to another.
 
 What happens:
 
