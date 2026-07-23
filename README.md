@@ -385,6 +385,14 @@ extended thinking need their native API.
 runner and point `base-url` at your server. Most local servers ignore the key,
 but the input is required, so pass any placeholder.
 
+**Your ChatGPT (Codex) subscription — planned.** A design to pay for reviews
+with a ChatGPT Pro/Plus subscription (`model: codex`) instead of a metered key,
+via the same OAuth device flow the Codex CLI uses, is written up in
+[docs/codex-chatgpt-auth.md](docs/codex-chatgpt-auth.md). It is **not built
+yet** — the doc exists so the flow and its constraints (the ChatGPT endpoint is
+the Responses API, not `chat/completions`; a GitHub Action cannot store its own
+secret on the default token) can be reviewed first.
+
 ---
 
 ## Recipes

@@ -136,7 +136,11 @@ Report:
 
   Volume without weight. Many lines doing little: blocks duplicated with one
   value changed, a hand-rolled version of a language feature, defensive layers
-  guarding against nothing reachable, code that is dead on arrival.
+  guarding against nothing reachable, code that is dead on arrival. Include the
+  change that solves a bigger problem than the one posed — an order of magnitude
+  more code than the diff needs, handling inputs that cannot occur and cases no
+  caller reaches. The test is reachability, not length: guard a real boundary
+  and keep it, guard a state the code cannot enter and it is slop.
 
   Tests that cannot fail. A test that mocks the very thing it claims to test,
   asserts on its own fixture, or would still pass with the feature deleted.
