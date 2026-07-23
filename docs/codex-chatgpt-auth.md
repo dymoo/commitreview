@@ -133,6 +133,20 @@ present. That is chicken-and-egg (you store an admin PAT to store a token) and
 the PAT is far more dangerous than the thing it bootstraps. **Not recommended**,
 and only worth building if Strategy A proves untenable because of rotation ↓.
 
+### Not viable: the Actions cache or artifacts
+
+The tempting shortcut is to skip secrets entirely and persist the token with
+`actions/cache` or an artifact, which the default `GITHUB_TOKEN` _can_ write.
+Do not. Neither is a secret store: cache and artifact contents are recoverable
+in plaintext by anyone who can run a workflow in the repo, are not masked in
+logs, and artifacts are directly downloadable by anyone with read access. Using
+either to hold a `refresh_token` — which is bearer access to the user's ChatGPT
+account — is a credential leak, not a persistence trick. Persistence of a
+secret-grade token needs a secret-grade store, and on GitHub that is the Actions
+secret, which loops back to needing an elevated credential to write (Strategy B)
+or a human to paste (Strategy A). There is no default-token path that is both
+persistent and safe.
+
 ## Open risk: does the refresh token rotate?
 
 OpenAI's refresh response _returns a new `refresh_token` every time_, and the
