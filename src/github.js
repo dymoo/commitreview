@@ -4,10 +4,9 @@ import { isSafeRepoPath } from './repo.js';
 const USER_AGENT = 'commitreview';
 
 export class HttpError extends Error {
-  constructor(status, message, body) {
+  constructor(status, message) {
     super(message);
     this.status = status;
-    this.body = body;
   }
 }
 
@@ -45,7 +44,7 @@ export class GitHub {
       } catch (err) {
         lastError = err;
         if (attempt === this.retries) break;
-        await core.sleep(backoff(attempt));
+        await core.sleep(core.backoff(attempt));
         continue;
       }
 
@@ -58,10 +57,10 @@ export class GitHub {
       const text = await res.text().catch(() => '');
       const retryable = res.status === 429 || res.status >= 500 || isSecondaryRateLimit(res, text);
       if (!retryable || attempt === this.retries) {
-        throw new HttpError(res.status, `${method} ${path} failed: ${res.status} ${truncate(text, 400)}`, text);
+        throw new HttpError(res.status, `${method} ${path} failed: ${res.status} ${truncate(text, 400)}`);
       }
       const after = Number(res.headers.get('retry-after'));
-      await core.sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : backoff(attempt));
+      await core.sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : core.backoff(attempt));
     }
 
     throw new HttpError(0, `${method} ${path} failed: ${lastError?.message || 'network error'}`);
@@ -250,10 +249,6 @@ function parseNextLink(link) {
 
 function isSecondaryRateLimit(res, text) {
   return res.status === 403 && /secondary rate limit|abuse detection/i.test(text);
-}
-
-function backoff(attempt) {
-  return Math.min(30000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 500);
 }
 
 function safeJson(text) {

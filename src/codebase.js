@@ -82,6 +82,8 @@ const MARKDOWN_LINK_PATTERN = /\[[^\]]*\]\(\s*(?!https?:)([\w./-]+\.(?:md|mdc))\
 
 const INSTRUCTION_DOC_BUDGET = 60000;
 const INSTRUCTION_DOC_LINES = 300;
+// How many levels of @import to follow out of an instruction file.
+const INSTRUCTION_IMPORT_DEPTH = 2;
 
 const isInteresting = (name) => name.length >= 3 && !STOPWORDS.has(name) && !STOPWORDS.has(name.toLowerCase());
 
@@ -186,11 +188,7 @@ function resolveDocPath(from, target) {
  * those documents import. Imports are followed breadth-first with a depth cap,
  * because an AGENTS.md that pulls in six standards documents is normal now.
  */
-export async function collectInstructionDocs(
-  repo,
-  changedPaths,
-  { maxDepth = 2, budget = INSTRUCTION_DOC_BUDGET } = {},
-) {
+export async function collectInstructionDocs(repo, changedPaths) {
   const all = new Set(await repo.list());
   const queue = [];
   const seen = new Set();
@@ -222,11 +220,11 @@ export async function collectInstructionDocs(
     if (!content) continue;
 
     const trimmed = content.split('\n').slice(0, INSTRUCTION_DOC_LINES).join('\n');
-    if (spent + trimmed.length > budget) continue;
+    if (spent + trimmed.length > INSTRUCTION_DOC_BUDGET) continue;
     spent += trimmed.length;
     docs.push({ path, why, content: trimmed });
 
-    if (depth >= maxDepth) continue;
+    if (depth >= INSTRUCTION_IMPORT_DEPTH) continue;
     for (const pattern of [IMPORT_PATTERN, MARKDOWN_LINK_PATTERN]) {
       pattern.lastIndex = 0;
       for (const match of content.matchAll(pattern)) {

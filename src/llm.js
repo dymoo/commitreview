@@ -67,7 +67,7 @@ export class LLM {
   /**
    * One request, returning the whole assistant message so a tool loop can see
    * tool_calls. Adapts and retries around parameters the endpoint rejects.
-   * @returns {Promise<{message: any, finishReason: string}>}
+   * @returns {Promise<{message: any}>}
    */
   async send(messages, options = {}) {
     const url = `${this.config.baseUrl}/chat/completions`;
@@ -91,7 +91,7 @@ export class LLM {
         });
       } catch (err) {
         if (networkRetries++ >= 3) throw new Error(`Model request failed: ${err.message}`, { cause: err });
-        await core.sleep(backoff(networkRetries));
+        await core.sleep(core.backoff(networkRetries));
         continue;
       }
 
@@ -105,7 +105,7 @@ export class LLM {
         if (!message.content && !message.reasoning_content && !message.tool_calls?.length) {
           core.warning('Model returned an empty message.');
         }
-        return { message, finishReason: choice.finish_reason || '' };
+        return { message };
       }
 
       const text = await res.text().catch(() => '');
@@ -113,7 +113,9 @@ export class LLM {
       if (res.status === 429 || res.status >= 500) {
         if (networkRetries++ >= 3) throw new Error(`Model request failed: ${res.status} ${truncate(text)}`);
         const after = Number(res.headers.get('retry-after'));
-        await core.sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : backoff(networkRetries));
+        await core.sleep(
+          Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : core.backoff(networkRetries),
+        );
         continue;
       }
 
@@ -261,24 +263,21 @@ export function extractJson(text) {
     const direct = tryParse(candidate.trim());
     if (direct !== undefined) return direct;
   }
-  const candidates = [cleaned];
 
-  // A response cut off by a token limit is checked before complete regions:
-  // the truncated outer object holds every finding, while the only complete
-  // region inside it is the first finding on its own.
-  for (const candidate of candidates) {
-    const repaired = repairTruncated(candidate);
-    if (repaired !== undefined) return repaired;
-  }
+  // Recovery runs on the whole cleaned text only — never on a fenced capture,
+  // which may be truncated at a ``` inside a string and would close into
+  // something plausible and wrong. A response cut off by a token limit is
+  // checked before complete regions: the truncated outer object holds every
+  // finding, while the only complete region inside it is the first alone.
+  const repaired = repairTruncated(cleaned);
+  if (repaired !== undefined) return repaired;
 
   let best;
   let bestLength = 0;
-  for (const candidate of candidates) {
-    for (const region of balancedRegions(candidate)) {
-      if (region.source.length > bestLength) {
-        best = region.value;
-        bestLength = region.source.length;
-      }
+  for (const region of balancedRegions(cleaned)) {
+    if (region.source.length > bestLength) {
+      best = region.value;
+      bestLength = region.source.length;
     }
   }
   return best === undefined ? null : best;
@@ -393,10 +392,6 @@ function tryParse(s) {
 }
 
 const stripTrailingCommas = (s) => s.replace(/,(\s*[}\]])/g, '$1');
-
-function backoff(attempt) {
-  return Math.min(30000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 500);
-}
 
 function truncate(s, n = 400) {
   s = String(s ?? '');

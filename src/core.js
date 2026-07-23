@@ -101,3 +101,6 @@ export const sleep = (ms) =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+
+/** Exponential backoff with jitter, capped at 30s, for retry loops. */
+export const backoff = (attempt) => Math.min(30000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 500);
