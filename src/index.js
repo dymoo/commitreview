@@ -1,14 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as core from './core.js';
-import { readConfig, readEvent, severityRank, LENSES, TASTE_LENS } from './config.js';
+import { readConfig, readEvent, severityRank, LENSES, TASTE_LENS, BOT_SIGNATURE } from './config.js';
 import { GitHub } from './github.js';
 import { parseDiff, anchorFinding, lineText } from './diff.js';
-import { selectFiles, renderFile, buildChunks, sliceAround } from './context.js';
+import { selectFiles, renderFile, buildChunks, sliceAround, estimateTokens } from './context.js';
 import { LLM } from './llm.js';
 import { findFindings, refuteFinding, synthesise } from './review.js';
 import { mergeFindings, fingerprint, collectFingerprints } from './findings.js';
-import { buildCodebaseContext } from './codebase.js';
+import { collectInstructionDocs, renderConventions } from './codebase.js';
 import { investigate } from './agent.js';
 import { answer, isReviewRequest, findThread } from './chat.js';
 import { openRepo } from './repo.js';
@@ -52,7 +52,6 @@ async function main() {
   const repo = await openRepo(gh, { owner: ctx.owner, repo: ctx.repo, sha: pr.head.sha, config });
   const panel = config.panel.map((member) => new LLM({ ...config, ...member }));
   const llm = panel[0];
-  if (config.agentic === 'off') for (const client of panel) client.quirks.tools = false;
 
   // A mention carrying an actual question is a conversation, not a review.
   if (ctx.trigger === 'mention' && !isReviewRequest(ctx.focus)) {
@@ -250,28 +249,36 @@ async function main() {
 }
 
 /**
- * Codebase context, agentically when the endpoint can drive tools and
- * deterministically when it cannot. Downstream never learns which ran.
+ * Codebase context: the project's own rules, plus an agentic investigation of
+ * the repository. The investigation requires tool calling — an endpoint that
+ * cannot drive tools is rejected up front rather than quietly degraded, so the
+ * review is never silently worse than it looks.
+ *
+ * The rules are gathered deterministically and always reach the reviewer; the
+ * investigation is layered on top. Downstream sees one context block and does
+ * not care which part produced which line.
  */
 async function gatherContext({ llm, repo, selected, diffText, pr, config }) {
   if (!repo) return null;
 
-  if (config.agentic !== 'off') {
-    const investigated = await investigate(llm, { repo, files: selected, diffText, pr, config });
-    if (investigated) return investigated;
-    if (config.agentic === 'on') {
-      core.warning('agentic: on was requested but the investigation produced nothing; falling back.');
-    }
-  }
+  const docs = await collectInstructionDocs(
+    repo,
+    selected.map((f) => f.path),
+  );
+  const conventions = renderConventions(docs);
 
-  const built = await buildCodebaseContext(repo, selected, config);
-  if (built.text) {
-    core.info(
-      `Codebase context: ${built.stats.definitions} definition(s), ${built.stats.references} symbol(s) with external callers, ` +
-        `${built.stats.conventions} instruction doc(s), ~${built.tokens} tokens.`,
-    );
-  }
-  return { ...built, stats: { ...built.stats, mode: 'deterministic' } };
+  const investigated = await investigate(llm, { repo, files: selected, diffText, pr, config });
+
+  const parts = [conventions, investigated?.text].filter(Boolean);
+  if (!parts.length) return null;
+  const text = parts.join('\n\n');
+
+  const stats = { ...(investigated?.stats || { mode: 'no investigation' }), conventions: docs.length };
+  core.info(
+    `Codebase context: ${docs.length} instruction doc(s), ` +
+      `${investigated ? `${investigated.stats.toolCalls} lookup(s)` : 'no investigation'}, ~${estimateTokens(text)} tokens.`,
+  );
+  return { text, tokens: estimateTokens(text), stats };
 }
 
 /** Conversational reply — the @mention-with-a-question path. */
@@ -289,7 +296,7 @@ async function runChat({ config, ctx, gh, llm, pr, conversation, repo, diffText 
     config,
   });
 
-  const body = `${reply}\n\n<sub>commitreview · ${llm.usage.requests} request${llm.usage.requests === 1 ? '' : 's'} · <a href="https://github.com/dymoo/commitreview">what is this?</a></sub>`;
+  const body = `${reply}\n\n<sub>commitreview · ${llm.usage.requests} request${llm.usage.requests === 1 ? '' : 's'} · <a href="https://github.com/dymoo/commitreview">what is this?</a></sub>\n${BOT_SIGNATURE}`;
 
   if (config.dryRun) {
     core.info('dry-run: not posting the reply.');
@@ -359,7 +366,7 @@ main().catch(async (err) => {
         ctx.owner,
         ctx.repo,
         ctx.prNumber,
-        `**commitreview** could not finish.\n\n\`\`\`\n${String(err?.message || err).slice(0, 1000)}\n\`\`\`\n\n<sub>See the [workflow run](${process.env.GITHUB_SERVER_URL || 'https://github.com'}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}) for details.</sub>`,
+        `**commitreview** could not finish.\n\n\`\`\`\n${String(err?.message || err).slice(0, 1000)}\n\`\`\`\n\n<sub>See the [workflow run](${process.env.GITHUB_SERVER_URL || 'https://github.com'}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}) for details.</sub>\n${BOT_SIGNATURE}`,
       );
     }
   } catch {

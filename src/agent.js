@@ -1,16 +1,15 @@
 /**
- * Optional investigation phase: let the model go and look things up itself.
+ * Investigation phase: let the model go and look things up itself.
  *
- * The deterministic retrieval in codebase.js is a good floor — it always works,
- * on any endpoint, at predictable cost. Its ceiling is that it cannot follow a
- * call chain three hops, read a test to see whether a branch is covered, or go
- * and check the thing it only became suspicious of halfway through.
+ * A reviewer that sees only a diff cannot follow a call chain three hops, read a
+ * test to see whether a branch is covered, or go and check the thing it only
+ * became suspicious of halfway through. So we run a bounded read-only loop over
+ * the primitives in codebase.js and let the model decide what to look at.
  *
- * So when the endpoint supports tool calling, we run a bounded read-only loop
- * over exactly the primitives codebase.js already uses, and the model decides
- * what to look at. Its output is a briefing in the same shape the deterministic
- * path produces, so everything downstream — lenses, refutation, anchoring — is
- * unchanged and does not know which produced it.
+ * Tool calling is required — an endpoint that cannot drive tools is rejected in
+ * llm.js rather than degraded, because a diff-only review that looks the same is
+ * worse than an honest failure. This is a 2026 code-review tool; function
+ * calling is table stakes.
  *
  * The loop is deliberately small: four read-only tools, a turn cap, no shell,
  * no network, no writes. An agent that can only read cannot surprise you.
@@ -228,8 +227,8 @@ function parseArgs(raw) {
 }
 
 /**
- * Bounded read-only tool loop. Returns null when the endpoint turns out not to
- * support tool calling, so callers can fall back to a one-shot path.
+ * Bounded read-only tool loop. Returns null when it produces nothing usable;
+ * throws (with `toolsUnsupported`) when the endpoint cannot drive tools at all.
  *
  * @returns {Promise<{text: string, turns: number, calls: number, capped: boolean}|null>}
  */
@@ -246,12 +245,11 @@ export async function toolLoop(llm, { system, user, repo, config, turns, closing
     try {
       ({ message } = await llm.send(messages, { tools: TOOLS, jsonMode: false }));
     } catch (err) {
+      // An endpoint that cannot drive tools is unsupported, not a soft failure —
+      // let that propagate and fail the run rather than swallowing it.
+      if (err.toolsUnsupported) throw err;
       core.warning(`${label} stopped after ${turn} turn(s): ${err.message}`);
       break;
-    }
-    if (!llm.quirks.tools) {
-      core.info('Endpoint does not support tool calling; falling back.');
-      return null;
     }
 
     const toolCalls = message.tool_calls || [];
@@ -291,8 +289,9 @@ export async function toolLoop(llm, { system, user, repo, config, turns, closing
 }
 
 /**
- * Investigation phase. Produces the same shape as buildCodebaseContext so that
- * lenses, refutation and anchoring never learn which path produced their input.
+ * Investigation phase. Produces a briefing that gatherContext folds together
+ * with the project rules; lenses, refutation and anchoring never learn how the
+ * context was assembled.
  *
  * @returns {Promise<{text: string, tokens: number, stats: object}|null>}
  */

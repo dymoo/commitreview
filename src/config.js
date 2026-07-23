@@ -2,6 +2,26 @@ import fs from 'node:fs';
 import * as core from './core.js';
 
 export const SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'];
+
+/**
+ * The two verdict tokens a skeptic returns. Shared by the prompt that asks for
+ * them (prompts.js), the schema that constrains them (schema.js) and the parser
+ * that reads them (review.js), so the three cannot drift apart — a reworded
+ * token would otherwise make every finding read as refuted, silently.
+ */
+export const VERDICT_REAL = 'real';
+export const VERDICT_NOT_REAL = 'not_real';
+
+/**
+ * Marks a comment as the bot's own. `isOurs` (review.js) strips these out of the
+ * conversation before it is fed back to the model, so the reviewer never reads
+ * its own prose as human discussion. Every structured marker contains
+ * BOT_MARKER; free-text bot comments (chat answers, error notices, the review
+ * wrapper) must carry BOT_SIGNATURE, which contains it too. Lives here, not in
+ * post.js, because review.js needs it as well and shared constants point one way.
+ */
+export const BOT_MARKER = 'commitreview:';
+export const BOT_SIGNATURE = '<!-- commitreview:bot -->';
 /** Lower rank is more severe. */
 export const severityRank = (s) => {
   const i = SEVERITIES.indexOf(String(s || '').toLowerCase());
@@ -315,9 +335,6 @@ export function readConfig() {
   const repoContext = core.getInput('repo-context', preset.repoContext).toLowerCase();
   if (!['auto', 'off'].includes(repoContext)) throw new Error('Input "repo-context" must be auto or off');
 
-  const agentic = core.getInput('agentic', 'auto').toLowerCase();
-  if (!['auto', 'on', 'off'].includes(agentic)) throw new Error('Input "agentic" must be auto, on or off');
-
   const minSeverity = core.getInput('min-severity', preset.minSeverity).toLowerCase();
   if (!SEVERITIES.includes(minSeverity)) {
     throw new Error(`Input "min-severity" must be one of ${SEVERITIES.join(', ')}`);
@@ -361,7 +378,6 @@ export function readConfig() {
 
     depth,
     repoContext,
-    agentic,
     agentTurns: Math.max(1, core.getNumber('agent-turns', preset.agentTurns)),
     maxRelatedTokens: core.getNumber('max-related-tokens', preset.maxRelatedTokens),
     lenses: Math.max(1, Math.min(LENSES.length, core.getNumber('review-passes', preset.lenses))),

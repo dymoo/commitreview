@@ -365,7 +365,7 @@ test('the agent investigates with tools, and the findings pass carries the brief
   });
   t.after(() => server.close());
 
-  const run = await runAction(port, { 'INPUT_REPO-CONTEXT': 'auto', INPUT_AGENTIC: 'on' });
+  const run = await runAction(port, { 'INPUT_REPO-CONTEXT': 'auto' });
   assert.equal(run.code, 0, run.stderr);
 
   // The tool call was actually served from the repository.
@@ -384,20 +384,22 @@ test('the agent investigates with tools, and the findings pass carries the brief
   assert.match(captured.issueComments[0].body, /codebase lookup/);
 });
 
-test('an endpoint that rejects tool calling falls back instead of failing', async (t) => {
+test('an endpoint that cannot drive tools is rejected, not silently degraded', async (t) => {
   const { server, captured, port } = await stubServer({
     llmReply: (body) => (isRefutation(body) ? '{"verdict":"real"}' : JSON.stringify(FINDINGS)),
     rejectTools: true,
   });
   t.after(() => server.close());
 
-  const run = await runAction(port, { 'INPUT_REPO-CONTEXT': 'auto', INPUT_AGENTIC: 'auto' });
-  assert.equal(run.code, 0, run.stderr);
-  assert.equal(captured.reviews.length, 1, 'the review still happened');
-  // Exactly one probe: the rejection is what discovers the limitation, and it
-  // must not be repeated for every later request.
-  assert.equal(captured.llmRequests.filter((b) => b.tools).length, 1);
-  assert.ok(run.stdout.includes('Endpoint rejected tool calling'));
+  const run = await runAction(port, { 'INPUT_REPO-CONTEXT': 'auto' });
+  // Tool calling is required: the run fails loudly rather than posting a
+  // diff-only review that looks the same but saw less.
+  assert.notEqual(run.code, 0, 'the run fails instead of degrading');
+  assert.equal(captured.reviews.length, 0, 'no review is posted');
+  assert.ok(
+    /tool calling/i.test(run.stdout) || /tool calling/i.test(run.stderr),
+    'the failure names tool calling as the reason',
+  );
 });
 
 test('a panel reviews with every model, cross-checks, and lets the lead reconcile', async (t) => {

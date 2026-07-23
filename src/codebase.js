@@ -1,20 +1,19 @@
 /**
- * Codebase context: what the diff calls, and what calls the diff.
+ * Codebase primitives: what the diff calls, what calls the diff, and the rules
+ * that govern it.
  *
- * A reviewer that only sees a diff cannot answer the two questions that decide
- * most real defects — what does this function I am calling actually return, and
- * who else depends on the thing I just changed. So before reviewing we pull:
- *
- *   definitions  for symbols the changed lines *use* but do not define
- *   references   for symbols the changed lines *define or modify*, found
- *                elsewhere in the repository (the callers a change can break)
- *   conventions  the project's own agent/contributor instructions, if any
+ * The agentic investigation (agent.js) drives these to answer the two questions
+ * a diff cannot — what does a called function actually return, and who depends
+ * on what changed — via `extractSymbols` (which identifiers the change defines
+ * vs uses) and `scanRepository` (where they are defined and referenced). The
+ * project's own rules are gathered by `collectInstructionDocs` and rendered by
+ * `renderConventions`; they reach the reviewer on every run.
  *
  * ponytail: identifier extraction is regex, not a parser. It over-collects on
  * some languages and misses clever indirection. That is acceptable — this feeds
  * a model, not a compiler. Swap in tree-sitter if precision starts to matter.
  */
-import { matchAny, estimateTokens } from './context.js';
+import { matchAny } from './context.js';
 
 const IDENT = '[A-Za-z_$][A-Za-z0-9_$]*';
 
@@ -238,105 +237,20 @@ export async function collectInstructionDocs(
   return docs;
 }
 
-function snippet(lines, at, before, after) {
-  const start = Math.max(1, at - before);
-  const end = Math.min(lines.length, at + after);
-  return Array.from({ length: end - start + 1 }, (_, i) => {
-    const n = start + i;
-    return `${String(n).padStart(6)} ${n === at ? '>' : ' '} ${lines[n - 1]}`;
-  }).join('\n');
-}
-
 /**
- * Assemble the codebase context block, newest-value-first and bounded by tokens.
- * @returns {Promise<{text: string, tokens: number, stats: object}>}
+ * Render collected instruction documents into the "project rules" block the
+ * reviewer treats as binding. Kept separate from retrieval because the rules
+ * reach the reviewer on every run, whatever the investigation surfaces — a
+ * change that violates a documented rule is a finding even when it compiles.
  */
-export async function buildCodebaseContext(repo, files, config) {
-  if (!repo || config.maxRelatedTokens <= 0) {
-    return { text: '', tokens: 0, stats: { definitions: 0, references: 0, conventions: 0 } };
-  }
-
-  const changedPaths = files.map((f) => f.path);
-  const { defined, used } = extractSymbols(files);
-  const hits = await scanRepository(repo, {
-    wanted: new Set([...used, ...defined]),
-    skipPaths: changedPaths,
-    ignore: config.ignore,
-  });
-
-  const budget = config.maxRelatedTokens;
-  let spent = 0;
-  const sections = [];
-  const stats = { definitions: 0, references: 0, conventions: 0 };
-  const fileCache = new Map();
-  const readLines = async (p) => {
-    if (!fileCache.has(p)) fileCache.set(p, (await repo.read(p))?.split('\n') || []);
-    return fileCache.get(p);
-  };
-  const fits = (text) => spent + estimateTokens(text) <= budget;
-
-  // 1. The project's own rules. Cheap, and they change what counts as a defect.
-  const docs = await collectInstructionDocs(repo, changedPaths);
-  if (docs.length) {
-    const blocks = docs.map((d) => `--- ${d.path} (${d.why}) ---\n${d.content}`);
-    const text =
-      `## Project rules and conventions\n\n` +
-      `These are this repository's own instructions to contributors and coding agents. ` +
-      `Treat them as binding: code that violates a rule stated here is a finding, ` +
-      `with category "convention", even when it would otherwise be correct. ` +
-      `Where a rule contradicts your general preferences, the rule wins.\n\n${blocks.join('\n\n')}`;
-    if (fits(text)) {
-      sections.push(text);
-      spent += estimateTokens(text);
-      stats.conventions = docs.length;
-    }
-  }
-
-  // 2. Definitions of what the changed code calls.
-  const definitionBlocks = [];
-  for (const symbol of used) {
-    const found = hits.get(symbol)?.defs ?? [];
-    for (const hit of found.slice(0, 2)) {
-      const lines = await readLines(hit.path);
-      if (!lines.length) continue;
-      const block = `### ${symbol} — defined at ${hit.path}:${hit.line}\n${snippet(lines, hit.line, 1, 14)}`;
-      if (!fits(block)) break;
-      definitionBlocks.push(block);
-      spent += estimateTokens(block);
-      stats.definitions++;
-    }
-  }
-  if (definitionBlocks.length) {
-    sections.push(`## Definitions of symbols the changed code calls\n\n${definitionBlocks.join('\n\n')}`);
-  }
-
-  // 3. Callers of what the change modifies — the blast radius.
-  const referenceBlocks = [];
-  for (const symbol of defined) {
-    const found = hits.get(symbol)?.refs ?? [];
-    if (!found.length) continue;
-    const rows = [];
-    for (const hit of found.slice(0, 8)) {
-      const lines = await readLines(hit.path);
-      if (!lines.length) continue;
-      rows.push(`${hit.path}:${hit.line}\n${snippet(lines, hit.line, 1, 2)}`);
-    }
-    if (!rows.length) continue;
-    const block = `### ${symbol} — used in ${found.length} place${found.length === 1 ? '' : 's'} outside this change\n${rows.join('\n')}`;
-    if (!fits(block)) break;
-    referenceBlocks.push(block);
-    spent += estimateTokens(block);
-    stats.references++;
-  }
-  if (referenceBlocks.length) {
-    sections.push(
-      `## Existing callers of symbols this change modifies\n` +
-        `Check each one against the new behaviour — these are what a signature or contract change breaks.\n\n${referenceBlocks.join(
-          '\n\n',
-        )}`,
-    );
-  }
-
-  const text = sections.join('\n\n');
-  return { text, tokens: estimateTokens(text), stats };
+export function renderConventions(docs) {
+  if (!docs.length) return '';
+  const blocks = docs.map((d) => `--- ${d.path} (${d.why}) ---\n${d.content}`);
+  return (
+    `## Project rules and conventions\n\n` +
+    `These are this repository's own instructions to contributors and coding agents. ` +
+    `Treat them as binding: code that violates a rule stated here is a finding, ` +
+    `with category "convention", even when it would otherwise be correct. ` +
+    `Where a rule contradicts your general preferences, the rule wins.\n\n${blocks.join('\n\n')}`
+  );
 }

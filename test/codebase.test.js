@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseDiff } from '../src/diff.js';
-import { extractSymbols, scanRepository, collectInstructionDocs, buildCodebaseContext } from '../src/codebase.js';
+import { extractSymbols, scanRepository, collectInstructionDocs, renderConventions } from '../src/codebase.js';
 import { DEFAULT_IGNORES } from '../src/config.js';
 
 /** A repository that lives in an object literal. */
@@ -10,8 +10,6 @@ const fakeRepo = (files) => ({
   list: async () => Object.keys(files),
   read: async (p) => (p in files ? files[p] : null),
 });
-
-const CONFIG = { ignore: DEFAULT_IGNORES, maxRelatedTokens: 50000, maxFileBytes: 400000 };
 
 const DIFF = [
   'diff --git a/src/user.js b/src/user.js',
@@ -95,24 +93,20 @@ test('instruction imports resolve relatively and survive cycles', async () => {
   assert.equal(new Set(paths).size, paths.length, 'a cycle must not read a file twice');
 });
 
-test('the assembled context marks project rules as binding', async () => {
+test('rendered project rules are marked binding and cite each source', async () => {
   const repo = fakeRepo({
     'AGENTS.md': 'All money is integer pence.',
-    'src/options.js': 'export function validateOptions(o) {\n  return o;\n}',
-    'src/routes.js': 'const u = loadUser(req.id);',
+    'src/api/AGENTS.md': 'Every handler must be idempotent.',
   });
 
-  const built = await buildCodebaseContext(repo, parseDiff(DIFF), CONFIG);
-  assert.ok(built.text.includes('All money is integer pence.'));
-  assert.ok(built.text.includes('Treat them as binding'));
-  assert.ok(built.text.includes('validateOptions'), 'definitions of called symbols are included');
-  assert.ok(built.text.includes('Existing callers'), 'callers of changed symbols are included');
-  assert.equal(built.stats.conventions, 1);
-  assert.ok(built.tokens > 0);
+  const docs = await collectInstructionDocs(repo, ['src/api/handler.js']);
+  const text = renderConventions(docs);
+  assert.ok(text.includes('All money is integer pence.'));
+  assert.ok(text.includes('Every handler must be idempotent.'), 'directory-scoped rules are included');
+  assert.ok(text.includes('Treat them as binding'));
+  assert.ok(text.includes('AGENTS.md'), 'each rule cites the file it came from');
 });
 
-test('no repository and no budget means no context, not a crash', async () => {
-  assert.equal((await buildCodebaseContext(null, [], CONFIG)).text, '');
-  const repo = fakeRepo({ 'a.js': 'x' });
-  assert.equal((await buildCodebaseContext(repo, parseDiff(DIFF), { ...CONFIG, maxRelatedTokens: 0 })).text, '');
+test('no instruction docs render to nothing, not a crash', () => {
+  assert.equal(renderConventions([]), '');
 });

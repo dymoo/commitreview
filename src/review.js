@@ -7,11 +7,11 @@
  * material, call the model, hand back normalised findings.
  */
 import * as core from './core.js';
-import { SEVERITIES } from './config.js';
+import { SEVERITIES, VERDICT_REAL, BOT_MARKER } from './config.js';
 import { systemPrompt, REFUTE_SYSTEM, TASTE_REFUTE_SYSTEM, SYNTHESIS_SYSTEM, REFUTE_VIEWS } from './prompts.js';
+import { FINDINGS, VERDICT, SYNTHESIS } from './schema.js';
 import { normalizeFinding } from './findings.js';
 
-const BOT_MARKER = 'commitreview:';
 const isOurs = (body) => String(body || '').includes(BOT_MARKER);
 
 /**
@@ -117,7 +117,7 @@ Return the JSON object now.`;
       { role: 'system', content: systemPrompt(config, { lens, hasCodebase: Boolean(codebase?.text) }) },
       { role: 'user', content: user },
     ],
-    { label: `${lens.key} review of part ${index + 1}` },
+    { label: `${lens.key} review of part ${index + 1}`, schema: FINDINGS, schemaName: 'code_review' },
   );
 
   const findings = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.findings) ? parsed.findings : [];
@@ -168,14 +168,14 @@ Can you refute this claim? Return the JSON object now.`;
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { label: `refutation ${vote + 1} of ${finding.path}:${finding.line}` },
+    { label: `refutation ${vote + 1} of ${finding.path}:${finding.line}`, schema: VERDICT, schemaName: 'verdict' },
   );
 
   // An unparseable verdict must not silently promote a finding.
   if (!parsed || typeof parsed !== 'object') return { real: false, reason: 'verifier returned no verdict' };
 
   const verdict = str(parsed.verdict).toLowerCase();
-  const real = verdict === 'real' || verdict === 'true' || parsed.real === true;
+  const real = verdict === VERDICT_REAL || verdict === 'true' || parsed.real === true;
   const severity = SEVERITIES.includes(str(parsed.severity).toLowerCase()) ? str(parsed.severity).toLowerCase() : null;
   return { real, reason: str(parsed.reason).slice(0, 500), severity };
 }
@@ -216,7 +216,7 @@ ${JSON.stringify(listing, null, 2)}
 Return the JSON object now.`,
       },
     ],
-    { label: 'synthesis' },
+    { label: 'synthesis', schema: SYNTHESIS, schemaName: 'synthesis' },
   );
 
   if (!parsed || !Array.isArray(parsed.keep)) {

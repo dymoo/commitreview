@@ -68,15 +68,10 @@ inputs:
     default: standard
   repo-context:
     description: >-
-      auto reads the repository at the head commit so the reviewer can see
-      definitions, callers and project rules. off reviews the diff alone.
-    required: false
-    default: auto
-  agentic:
-    description: >-
-      Let the model investigate the codebase itself with read-only tools —
-      on, off, or auto to use it when the endpoint supports tool calling and
-      fall back to deterministic retrieval when it does not.
+      auto reads the repository at the head commit so the reviewer can
+      investigate definitions, callers and project rules with read-only tools.
+      off reviews the diff alone. Investigation requires an endpoint that
+      supports tool calling.
     required: false
     default: auto
   agent-turns:

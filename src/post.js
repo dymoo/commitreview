@@ -7,7 +7,7 @@
  * survives a rebase or an unrelated edit above it without being re-posted.
  */
 import * as core from './core.js';
-import { severityRank } from './config.js';
+import { severityRank, BOT_SIGNATURE } from './config.js';
 
 export const SUMMARY_MARKER = '<!-- commitreview:summary -->';
 
@@ -118,11 +118,8 @@ export function renderSummary(result, config) {
     result.panel?.length > 1 ? `panel: ${result.panel.map((m) => `\`${m}\``).join(', ')}` : `model \`${config.model}\``,
     config.depth && config.depth !== 'standard' ? `depth ${config.depth}` : null,
     result.lenses?.length > 1 ? `${result.lenses.length} passes (${result.lenses.join(', ')})` : null,
-    context?.mode?.startsWith('agentic')
-      ? `${context.toolCalls} codebase lookup${context.toolCalls === 1 ? '' : 's'}`
-      : context?.definitions || context?.references
-        ? `${context.definitions} definition${context.definitions === 1 ? '' : 's'}, ${context.references} caller set${context.references === 1 ? '' : 's'}`
-        : null,
+    context?.toolCalls ? `${context.toolCalls} codebase lookup${context.toolCalls === 1 ? '' : 's'}` : null,
+    context?.conventions ? `${context.conventions} rule doc${context.conventions === 1 ? '' : 's'}` : null,
     `${usage.requests} request${usage.requests === 1 ? '' : 's'}`,
     usage.prompt || usage.completion ? `${usage.prompt + usage.completion} tokens` : null,
     refuted ? `${refuted} refuted` : null,
@@ -145,7 +142,7 @@ export async function postInline(gh, ctx, pr, comments) {
       commit_id: pr.head.sha,
       event: 'COMMENT',
       // The API requires a body for a COMMENT review; the detail is in the summary.
-      body: `**commitreview** left ${comments.length} comment${comments.length === 1 ? '' : 's'}.`,
+      body: `**commitreview** left ${comments.length} comment${comments.length === 1 ? '' : 's'}.\n${BOT_SIGNATURE}`,
       comments,
     });
     return comments.length;

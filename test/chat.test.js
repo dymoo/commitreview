@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { isReviewRequest, findThread } from '../src/chat.js';
 import { renderConversation } from '../src/review.js';
 import { runTool } from '../src/agent.js';
-import { DEFAULT_IGNORES } from '../src/config.js';
+import { DEFAULT_IGNORES, BOT_SIGNATURE } from '../src/config.js';
 
 test('a bare mention or "review" means review; anything else is a question', () => {
   for (const bare of ['', '   ', 'review', 'Review', 're-review', 'take another look', 'again', 'check']) {
@@ -44,6 +44,29 @@ test('the conversation renders commits, discussion and inline threads', () => {
 
 test('our own comments are excluded so the reviewer does not read itself', () => {
   assert.ok(!renderConversation(CONVERSATION).includes('commitreview:summary'));
+});
+
+// The summary carries a marker of its own, but the bot's free-text comments —
+// chat answers, error notices, the review wrapper — only carry BOT_SIGNATURE.
+// Without it they read back as human discussion and compound across re-runs.
+test('the bot signature keeps our free-text comments out of the conversation', () => {
+  const conversation = {
+    issueComments: [
+      { created_at: '2026-01-02', user: { login: 'alice' }, body: 'A genuine human question.' },
+      { created_at: '2026-01-03', user: { login: 'bot' }, body: `Here is my answer.\n${BOT_SIGNATURE}` },
+    ],
+    reviews: [
+      {
+        submitted_at: '2026-01-04',
+        user: { login: 'bot' },
+        body: `**commitreview** left 2 comments.\n${BOT_SIGNATURE}`,
+      },
+    ],
+  };
+  const text = renderConversation(conversation);
+  assert.ok(text.includes('A genuine human question.'), 'a real human comment survives');
+  assert.ok(!text.includes('Here is my answer.'), 'our chat answer is filtered');
+  assert.ok(!text.includes('left 2 comments'), 'our review wrapper is filtered');
 });
 
 test('an empty or missing conversation renders to nothing', () => {

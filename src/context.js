@@ -232,7 +232,10 @@ export function buildChunks(rendered, config) {
  */
 export function sliceAround(text, line, maxChars = 32000) {
   if (text.length <= maxChars) return text;
-  const hit = new RegExp(`^\\s*\\d*\\s+${line}\\s+[-+~ ]`, 'm').exec(text);
+  // renderRows writes "<old> <new> <marker> <source>". A RIGHT finding's line is
+  // in the new column, a LEFT finding's in the old — match either, or the slice
+  // silently centres on the head of the file and weakens the refutation.
+  const hit = new RegExp(`^\\s*(?:\\d*\\s+${line}|${line}\\s+\\d*)\\s+[-+~ ]`, 'm').exec(text);
   const centre = hit ? hit.index : 0;
   const start = Math.max(0, centre - Math.floor(maxChars / 2));
   return `${start > 0 ? '… earlier hunks omitted …\n' : ''}${text.slice(start, start + maxChars)}`;

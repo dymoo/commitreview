@@ -80,10 +80,56 @@ test('request body carries the tunables the endpoint is expected to support', ()
   assert.deepEqual(body.response_format, { type: 'json_object' });
 });
 
+test('sends a json schema as response_format when a schema is passed', () => {
+  const llm = new LLM(base);
+  const schema = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] };
+  const body = llm.buildBody([], { schema, schemaName: 'thing' });
+  assert.deepEqual(body.response_format, { type: 'json_schema', json_schema: { name: 'thing', strict: true, schema } });
+});
+
+test('a call without a schema still uses plain json_object mode', () => {
+  const llm = new LLM(base);
+  assert.deepEqual(llm.buildBody([]).response_format, { type: 'json_object' });
+});
+
+test('json_schema degrades to plain json_object before prompt-only', () => {
+  const llm = new LLM(base);
+  const schema = { type: 'object', properties: {}, required: [] };
+  assert.equal(llm.adapt('This model does not support json_schema response_format'), true);
+  // Still asks for JSON, just not the schema-constrained kind.
+  assert.deepEqual(llm.buildBody([], { schema }).response_format, { type: 'json_object' });
+  // A subsequent json_object rejection is what finally drops to prompt-only.
+  assert.equal(llm.adapt('Unsupported parameter: response_format'), true);
+  assert.equal(llm.buildBody([], { schema }).response_format, undefined);
+});
+
 test('drops response_format when the endpoint rejects it', () => {
   const llm = new LLM(base);
   assert.equal(llm.adapt('Unsupported parameter: response_format'), true);
   assert.equal(llm.buildBody([]).response_format, undefined);
+});
+
+test('an endpoint that rejects tool calling is a hard error, not a degrade', async () => {
+  const llm = new LLM(base);
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ error: { message: 'this model does not support tools' } }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    });
+  try {
+    await assert.rejects(
+      () =>
+        llm.send([{ role: 'user', content: 'hi' }], {
+          tools: [{ type: 'function', function: { name: 'x', parameters: { type: 'object', properties: {} } } }],
+        }),
+      (/** @type {any} */ err) => err.toolsUnsupported === true && /tool calling/i.test(err.message),
+    );
+  } finally {
+    // Single-threaded test: the save/restore is not a real race.
+    // eslint-disable-next-line require-atomic-updates
+    globalThis.fetch = original;
+  }
 });
 
 test('renames max_tokens when the endpoint demands max_completion_tokens', () => {

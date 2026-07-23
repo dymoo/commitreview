@@ -248,22 +248,19 @@ independent verifiers, and needs a majority to be posted.
 
 A diff cannot tell you what the function you are calling actually returns, or
 who else depends on the thing you just changed. So the action fetches the
-repository at the head commit (one request, never executed) and works both out.
+repository at the head commit (one request, never executed) and the model
+investigates it for itself with four read-only tools — `search`, `read_file`,
+`list_files`, `find_definition` — for up to `agent-turns` turns. It follows what
+it becomes suspicious of, then hands the reviewer a briefing. The tools cannot
+write, run a shell, or reach the network.
 
-**When the endpoint supports tool calling**, the model investigates for itself
-with four read-only tools — `search`, `read_file`, `list_files`,
-`find_definition` — for up to `agent-turns` turns. It follows what it becomes
-suspicious of, which is the part deterministic retrieval cannot do.
+**Tool calling is required.** This is the one place the action expects a
+capable, current endpoint: a model that cannot drive tools is rejected with a
+clear error rather than quietly downgraded to a diff-only review that would look
+the same but see far less. Any mainstream model in 2026 qualifies.
 
-**When it does not**, the action falls back to deterministic retrieval that
-extracts the symbols your change defines and calls, then scans the repository
-for their definitions and their callers. Less thorough, but it works on every
-endpoint, at predictable cost.
-
-`agentic: auto` (the default) picks whichever the endpoint supports. Neither
-path can write, run a shell, or reach the network.
-
-**Project rules are read and treated as binding.** `AGENTS.md`, `CLAUDE.md`,
+**Project rules are read and treated as binding**, on every run, whatever the
+investigation turns up. `AGENTS.md`, `CLAUDE.md`,
 `CONVENTIONS.md`, `CONTRIBUTING.md`, `.cursorrules`, `.windsurfrules`,
 `.cursor/rules/*`, and `.github/copilot-instructions.md` — at the repository
 root and in every directory on the path to a changed file, so
@@ -297,16 +294,15 @@ Set `repo-context: off` to review the diff alone.
 
 ### Depth and context
 
-| Input                | Default      | Description                                                          |
-| -------------------- | ------------ | -------------------------------------------------------------------- |
-| `depth`              | `standard`   | `quick`, `standard` or `thorough`. Sets the defaults below.          |
-| `repo-context`       | from `depth` | `auto` reads the repository; `off` reviews the diff alone.           |
-| `agentic`            | `auto`       | `on`, `off`, or `auto` to use tools when the endpoint supports them. |
-| `agent-turns`        | from `depth` | Investigation turns before the agent must report back.               |
-| `review-passes`      | from `depth` | 1–4 perspectives: general, security, concurrency, integration.       |
-| `max-related-tokens` | from `depth` | Ceiling on codebase context sent alongside the diff.                 |
-| `context-lines`      | from `depth` | Real surrounding source shown around each hunk. `0` disables.        |
-| `instructions`       | —            | Extra guidance appended to the system prompt.                        |
+| Input                | Default      | Description                                                       |
+| -------------------- | ------------ | ----------------------------------------------------------------- |
+| `depth`              | `standard`   | `quick`, `standard` or `thorough`. Sets the defaults below.       |
+| `repo-context`       | from `depth` | `auto` investigates the repository; `off` reviews the diff alone. |
+| `agent-turns`        | from `depth` | Investigation turns before the agent must report back.            |
+| `review-passes`      | from `depth` | 1–4 perspectives: general, security, concurrency, integration.    |
+| `max-related-tokens` | from `depth` | Ceiling on codebase context sent alongside the diff.              |
+| `context-lines`      | from `depth` | Real surrounding source shown around each hunk. `0` disables.     |
+| `instructions`       | —            | Extra guidance appended to the system prompt.                     |
 
 ### What gets reviewed
 
@@ -370,12 +366,23 @@ include the version path.
 | Azure OpenAI     | `https://{resource}.openai.azure.com/openai/v1` |
 | vLLM / llama.cpp | `http://your-host:8000/v1`                      |
 
-Providers disagree about `response_format`, `temperature`, `max_tokens` and tool
-calling. commitreview probes: when an endpoint rejects one of those with a 400,
-it drops or renames the parameter, retries, and remembers for the rest of the
-run. JSON is always recovered from the response text — from fenced blocks, from
-prose, from `<think>` output, and from responses cut off by a token limit — so
-nothing depends on native structured output.
+Providers disagree about `response_format`, `temperature` and `max_tokens`.
+commitreview probes: when an endpoint rejects one with a 400, it drops or renames
+the parameter, retries, and remembers for the rest of the run.
+
+**Structured replies use a JSON schema when the endpoint offers one.** Every
+structured request carries an OpenAI [Structured
+Outputs](https://platform.openai.com/docs/guides/structured-outputs) schema and
+degrades on its own: `json_schema` (the model is constrained to the schema) →
+plain `json_object` mode → prompt-only. Whichever rung it lands on, JSON is still
+recovered from the response text — fenced blocks, prose, `<think>` output, and
+responses cut off by a token limit — so nothing depends on the endpoint honouring
+the schema. The schemas live in `src/schema.js`; the prompt describes the same
+shape as a fallback, and a test fails if the two drift.
+
+Tool calling is **not** probed-and-dropped like the parameters above — it is
+required. An endpoint that cannot drive tools is rejected, because the
+investigation depends on it (see [Codebase context](#codebase-context)).
 
 [Anthropic serves an OpenAI-compatible layer](https://docs.claude.com/en/api/openai-sdk)
 at `https://api.anthropic.com/v1`, with the caveat that prompt caching and
@@ -519,8 +526,9 @@ Full threat model in [SECURITY.md](SECURITY.md).
 ## Cost
 
 `standard` on a typical 300-line pull request is a handful of requests. `depth:
-thorough` multiplies that by the number of passes and verifiers, and an agentic
-investigation adds a turn per lookup. It is your key, so the dial is yours.
+thorough` multiplies that by the number of passes and verifiers, and the
+codebase investigation adds a turn per lookup. It is your key, so the dial is
+yours.
 
 Reviews trigger on `synchronize`, so a branch pushed ten times is reviewed ten
 times. The `concurrency` block in the quick start cancels superseded runs. To

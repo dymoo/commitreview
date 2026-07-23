@@ -5,8 +5,15 @@
  * and friends all serve /chat/completions but disagree about response_format,
  * temperature and max_tokens. So the client probes: on a 400 naming a parameter
  * it can live without, it drops or renames that parameter and retries, then
- * remembers for the rest of the run. Structured output is never assumed — the
- * JSON comes out of the text and is parsed defensively.
+ * remembers for the rest of the run.
+ *
+ * Structured output is used when offered but never assumed. A call that passes a
+ * `schema` asks for it three ways, strongest first: `json_schema` (the model is
+ * constrained to the schema — OpenAI Structured Outputs), then plain
+ * `json_object` mode, then prompt-only. Each rung is a probe: on rejection the
+ * client drops to the next and retries. Whichever rung it lands on, the JSON is
+ * still pulled out of the text and parsed defensively, so nothing depends on the
+ * endpoint honouring the schema.
  */
 import * as core from './core.js';
 
@@ -18,9 +25,11 @@ export class LLM {
     this.quirks = {
       jsonMode: config.jsonMode !== 'off',
       jsonModeForced: config.jsonMode === 'on',
+      // The strongest JSON rung. Dropped to plain json_object on rejection; only
+      // ever attempted when a call actually passes a schema.
+      jsonSchema: true,
       temperature: true,
       maxTokensKey: 'max_tokens',
-      tools: true,
     };
     this.usage = { prompt: 0, completion: 0, requests: 0 };
     // Bumped whenever quirks change, so a request built against older quirks
@@ -28,15 +37,20 @@ export class LLM {
     this.quirksVersion = 0;
   }
 
-  buildBody(messages, { tools = null, jsonMode = undefined } = {}) {
+  buildBody(messages, { tools = null, jsonMode = undefined, schema = null, schemaName = 'response' } = {}) {
     /** @type {Record<string, unknown>} */
     const body = { model: this.config.model, messages };
     if (this.quirks.temperature) body.temperature = this.config.temperature;
     if (this.quirks.maxTokensKey) body[this.quirks.maxTokensKey] = this.config.maxOutputTokens;
     // response_format and tools do not mix on several gateways; tools win.
     const wantJson = jsonMode === undefined ? this.quirks.jsonMode : jsonMode && this.quirks.jsonMode;
-    if (wantJson && !tools) body.response_format = { type: 'json_object' };
-    if (tools && this.quirks.tools) {
+    if (wantJson && !tools) {
+      body.response_format =
+        schema && this.quirks.jsonSchema
+          ? { type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } }
+          : { type: 'json_object' };
+    }
+    if (tools) {
       body.tools = tools;
       body.tool_choice = 'auto';
     }
@@ -103,6 +117,20 @@ export class LLM {
         continue;
       }
 
+      // Tool calling is required, not optional: an endpoint that rejects the
+      // tools it was sent is unsupported, and degrading it to a diff-only review
+      // would be a silently worse review. Fail loudly instead.
+      if (body.tools && /\btools?\b|tool_choice|function[_ ]call|function calling/i.test(text)) {
+        const e = /** @type {Error & {toolsUnsupported?: boolean}} */ (
+          new Error(
+            `This endpoint rejected tool calling, which commitreview requires (${res.status}). ` +
+              `Use a model and endpoint that support OpenAI-style function calling. ${truncate(text, 200)}`,
+          )
+        );
+        e.toolsUnsupported = true;
+        throw e;
+      }
+
       if ((res.status === 400 || res.status === 422 || res.status === 404) && attempt++ < 4) {
         // Another in-flight request may already have adapted for this same
         // rejection. If so, simply retry with the new quirks rather than
@@ -126,9 +154,12 @@ export class LLM {
   }
 
   #adapt(t) {
-    if (this.quirks.tools && /\btools?\b|tool_choice|function[_ ]call|function calling/i.test(t)) {
-      core.warning('Endpoint rejected tool calling — the reviewer will fall back to deterministic retrieval.');
-      this.quirks.tools = false;
+    // Drop json_schema to plain json_object first — many endpoints serve one and
+    // not the other. Matched on schema-specific wording so a bare
+    // "response_format not supported" falls straight through to the rung below.
+    if (this.quirks.jsonSchema && /json[_ ]?schema|structured output|response_format\.json_schema/i.test(t)) {
+      core.warning('Endpoint rejected json_schema — falling back to plain JSON mode.');
+      this.quirks.jsonSchema = false;
       return true;
     }
     if (this.quirks.jsonMode && !this.quirks.jsonModeForced && /response_format|json_object|json_schema/i.test(t)) {
@@ -160,23 +191,34 @@ export class LLM {
 
   /**
    * Ask for JSON and get an object back, or null.
-   * One repair round-trip when the first response will not parse.
+   *
+   * Pass `schema` (a JSON Schema from schema.js) to have supporting endpoints
+   * constrain the model to it; it degrades to plain JSON mode and then to
+   * prompt-only on its own. One repair round-trip when the first response will
+   * not parse either way.
+   *
+   * @param {Array<{role:string,content:string}>} messages
+   * @param {{label?: string, schema?: object|null, schemaName?: string}} [opts]
    */
-  async json(messages, { label = 'response' } = {}) {
-    const raw = await this.complete(messages);
+  async json(messages, { label = 'response', schema = null, schemaName = 'response' } = {}) {
+    const opts = { schema, schemaName };
+    const raw = await this.complete(messages, opts);
     const parsed = extractJson(raw);
     if (parsed !== null) return parsed;
 
     core.warning(`Could not parse JSON from the model's ${label}; asking it to repair.`);
-    const repaired = await this.complete([
-      ...messages,
-      { role: 'assistant', content: truncate(raw, 4000) },
-      {
-        role: 'user',
-        content:
-          'That was not valid JSON. Reply with the JSON object only — no prose, no markdown fences, no commentary.',
-      },
-    ]);
+    const repaired = await this.complete(
+      [
+        ...messages,
+        { role: 'assistant', content: truncate(raw, 4000) },
+        {
+          role: 'user',
+          content:
+            'That was not valid JSON. Reply with the JSON object only — no prose, no markdown fences, no commentary.',
+        },
+      ],
+      opts,
+    );
     const second = extractJson(repaired);
     if (second === null) core.warning(`Model ${label} still unparseable; treating as empty.`);
     return second;
