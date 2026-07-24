@@ -1,5 +1,5 @@
 name: commitreview
-description: Adversarial AI code review on pull requests. Bring your own key — any OpenAI-compatible endpoint.
+description: Context-aware AI code review on pull requests. Bring your own OpenAI-compatible endpoint.
 author: commitreview contributors
 
 branding:
@@ -11,187 +11,29 @@ inputs:
     description: API key for the OpenAI-compatible endpoint. Pass a secret, never a literal.
     required: true
   base-url:
-    description: Base URL of the OpenAI-compatible API, including the version path (e.g. https://openrouter.ai/api/v1).
-    required: false
-    default: https://api.openai.com/v1
-  model:
-    description: Model id to review with, as your provider names it.
+    description: Base URL of the OpenAI-compatible API, including its version path.
     required: true
-
+  model:
+    description: Model id as the provider names it.
+    required: true
   github-token:
-    description: Token used to read the PR and post comments. Needs pull-requests:write.
+    description: Token used to read the pull request and post comments.
     required: false
     default: ${{ github.token }}
-  pr-number:
-    description: Pull request number. Inferred from the triggering event when omitted.
-    required: false
-  trigger-phrase:
-    description: Phrase that triggers a review from an issue_comment event.
-    required: false
-    default: '@commitreview'
-  allowed-associations:
-    description: >-
-      Comma-separated author associations allowed to trigger a review by comment.
-      Set to ANY to disable the gate (not recommended on public repos — it lets
-      strangers spend your API key).
-    required: false
-    default: OWNER,MEMBER,COLLABORATOR
-
-  panel:
-    description: >-
-      Extra models to review with, as blank-line-separated blocks of "key: value"
-      accepting model, base-url, api-key and label. Every model reviews
-      independently, each finding is cross-checked by a model that did not find
-      it, and the lead model reconciles the result. A block that omits base-url
-      inherits the lead's endpoint and key; one that names its own base-url must
-      bring its own api-key. Costs one full review per model.
-    required: false
-    default: ''
-  model-label:
-    description: Short name for the lead model in comments and the summary. Defaults to the model id.
-    required: false
-
-  taste:
-    description: >-
-      Run the taste pass, which looks for project inconsistency and unjustified
-      complexity rather than defects — reinvention of code that already exists,
-      patterns applied unevenly, and abstractions nobody asked for.
-    required: false
-    default: 'true'
-
-  depth:
-    description: >-
-      How hard to look — quick, standard or thorough. Sets the defaults for
-      context, passes, verification votes and severity floor. Any input you set
-      explicitly still wins. thorough costs several times more than standard.
-    required: false
-    default: standard
-  repo-context:
-    description: >-
-      auto reads the repository at the head commit so the reviewer can
-      investigate definitions, callers and project rules with read-only tools.
-      off reviews the diff alone. Investigation requires an endpoint that
-      supports tool calling.
-    required: false
-    default: auto
-  agent-turns:
-    description: Maximum investigation turns before the agent must report back.
-    required: false
-  review-passes:
-    description: >-
-      How many review perspectives to run, in order: general, security,
-      concurrency and resources, integration. Defaults from depth.
-    required: false
-  max-related-tokens:
-    description: Approximate ceiling on codebase context sent alongside the diff.
-    required: false
-
-  include:
-    description: Newline-separated globs. When set, only matching files are reviewed.
+  instructions:
+    description: Extra repository-specific review guidance.
     required: false
     default: ''
   ignore:
-    description: Newline-separated globs to skip, added on top of the built-in ignore list.
+    description: Newline-separated path globs added to the built-in ignore list.
     required: false
     default: ''
-  use-default-ignores:
-    description: Skip lockfiles, build output, vendored code, snapshots and binaries.
-    required: false
-    default: 'true'
-
-  max-files:
-    description: Maximum number of changed files to review.
-    required: false
-    default: '60'
-  max-file-bytes:
-    description: Skip surrounding-context expansion for files larger than this. The diff itself is still reviewed.
-    required: false
-    default: '400000'
-  context-lines:
-    description: Lines of surrounding source shown around each hunk. 0 uses the raw diff context only.
-    required: false
-  max-input-tokens:
-    description: Approximate ceiling on diff tokens sent across the whole review.
-    required: false
-  chunk-tokens:
-    description: Approximate ceiling on diff tokens per model request.
-    required: false
-  concurrency:
-    description: Maximum in-flight model requests.
-    required: false
-    default: '4'
-
-  max-findings:
-    description: Keep at most this many findings before verification and posting.
-    required: false
-  min-severity:
-    description: Lowest severity to post — one of critical, high, medium, low, nit. Defaults from depth.
-    required: false
-  refute:
-    description: Run an adversarial pass that tries to disprove each finding before posting it.
-    required: false
-    default: 'true'
-  refute-votes:
-    description: Independent refutation attempts per finding. A finding survives on a majority.
-    required: false
-  instructions:
-    description: Extra review guidance appended to the system prompt (project conventions, focus areas).
-    required: false
-    default: ''
-
-  inline-comments:
-    description: Post findings as inline review comments. When false everything goes in the summary.
-    required: false
-    default: 'true'
-  summary-mode:
-    description: sticky updates one comment in place, new posts a fresh comment each run, off skips it.
-    required: false
-    default: sticky
-  suggestions:
-    description: Render model-provided fixes as committable GitHub suggestion blocks.
-    required: false
-    default: 'true'
-  fail-on:
-    description: Fail the step when a finding at or above this severity survives — critical, high, medium, low, nit or none.
-    required: false
-    default: none
-  dry-run:
-    description: Do everything except write to the pull request.
-    required: false
-    default: 'false'
-
-  temperature:
-    description: Sampling temperature. Dropped automatically if the model rejects it.
-    required: false
-    default: '0.1'
-  max-output-tokens:
-    description: >-
-      Maximum tokens per model response. Reasoning models spend this budget on
-      thinking before they answer, so leave headroom when using one.
-    required: false
-    default: '16000'
-  json-mode:
-    description: >-
-      Send response_format=json_object — on, off, or auto to try it and fall back
-      when the endpoint rejects it.
-    required: false
-    default: auto
-  request-timeout:
-    description: Per-request timeout in seconds.
-    required: false
-    default: '180'
 
 outputs:
   findings:
-    description: Number of findings that survived verification, whether or not they were new this run.
-  new-findings:
-    description: Number of findings posted this run, excluding ones already commented on.
-  findings-json:
-    description: Path to a JSON file with the full findings payload.
-  summary:
-    description: The markdown summary that was posted.
+    description: Number of findings that survived verification.
   reviewed:
-    description: 'true when a review ran, false when the trigger conditions were not met.'
+    description: 'true when a review ran; false when the event did not request one.'
 
 runs:
   using: node20

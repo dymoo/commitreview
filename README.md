@@ -1,23 +1,21 @@
 # commitreview
 
-**An open source, fully self-hostable equivalent of OpenAI's `@codex` cloud review — one you own end to end.**
+Context-aware AI code review as a GitHub Action. Bring an OpenAI-compatible
+endpoint and API key; commitreview reads the pull request and repository,
+investigates with read-only tools, verifies every candidate finding, and posts
+the survivors as inline comments.
 
-Mention it on a pull request and it reviews the change in the context of your
-whole codebase, argues with itself about what it found, and posts what survives
-as inline comments. Ask it a question and it answers in the thread. It runs in
-your own GitHub Actions runner, on your own API key, and nothing goes anywhere
-you did not send it.
+The v2 product is deliberately narrow:
 
-- **Catches vibe slop.** A dedicated taste pass looks for what linters and defect reviewers both miss: code that reinvents what you already have, patterns applied unevenly, an auth check present in one path and absent in its sibling, abstractions nobody asked for. [What that means →](#the-taste-pass-vibe-slop-and-restraint)
-- **Reviews the codebase, not just the diff.** It reads the repository at the head commit — the definitions of what your change calls, the callers of what your change modified, and the project's own `AGENTS.md` / `CLAUDE.md` rules.
-- **Ask several labs at once.** Run the same review across models from different labs; each finding is cross-checked by a model that did not find it, and the lead model reconciles the result. [Panel review →](#panel-review-several-labs-one-review)
-- **Talk to it.** `@commitreview why would that deadlock?` gets an answer. Reply to one of its comments and it replies in that thread.
-- **Any OpenAI-compatible endpoint.** OpenAI, OpenRouter, Ollama, Together, Groq, DeepSeek, vLLM, llama.cpp, Anthropic, Azure. One `base-url` + `model` + `api-key`.
-- **No service, no app to install, no third party.** Your key, your runner, your source code.
-- **No checkout required**, which makes `pull_request_target` safe here, and forks work.
-- **Zero dependencies, no `dist/` bundle.** The code that runs is the code in `src/`.
+- one model
+- one review pass
+- one adversarial verifier per finding
+- three read-only repository tools: `list_files`, `read_file`, `search`
+- inline comments plus one sticky summary
+- six inputs, with review limits owned by the action
 
----
+There is no hosted service, checkout, runtime dependency or bundled `dist/`.
+`action.yml` runs the audited source in `src/` directly on Node 20.
 
 ## Quick start
 
@@ -47,541 +45,175 @@ jobs:
       (github.event.issue.pull_request && contains(github.event.comment.body, '@commitreview'))
     runs-on: ubuntu-latest
     steps:
-      - uses: dymoo/commitreview@v1
+      - uses: dymoo/commitreview@v2
         with:
           api-key: ${{ secrets.LLM_API_KEY }}
           base-url: https://openrouter.ai/api/v1
-          model: moonshotai/kimi-k3
+          model: your-provider/model-id
 ```
 
-Add your provider key as a repository secret named `LLM_API_KEY`
-(**Settings → Secrets and variables → Actions → New repository secret**).
+Add `LLM_API_KEY` under **Settings → Secrets and variables → Actions**. The
+configured model must support OpenAI-style chat completions and tool calling.
 
-That is the whole setup. Open a pull request, or comment `@commitreview` on one.
+The workflow reviews every pull request update. A repository owner, member or
+collaborator can also request a focused review:
 
-> **Which model?** As of late July 2026, `moonshotai/kimi-k3` is the best
-> cheap reviewer we have found. Any capable model works — this is your key and
-> your choice, and the action deliberately ships no opinion beyond that.
-
----
-
-## Using it
-
-**Review on every push.** The `pull_request_target` trigger above reviews each
-push to a pull request.
-
-**Review on demand.** Comment `@commitreview` on a pull request. Add a focus and
-it takes the hint:
-
-```
-@commitreview review the migration for data loss
+```text
+@commitreview check the migration for data loss
 ```
 
-**Ask it things.** Any mention that is not a review request is a question, and
-it answers in a comment rather than reviewing:
-
-```
-@commitreview why would this deadlock under concurrent writes?
-@commitreview is the retry backoff actually reset between attempts?
-@commitreview is there already a helper for this in the codebase?
-```
-
-It answers with the same read-only tools it reviews with, so it reads the code
-before answering rather than guessing from the diff.
-
-**Reply to its comments.** Replying to one of its inline comments continues that
-thread, in that thread, with the thread's history in context. Disagree with it
-and it will tell you if you are right.
-
-The bot reacts 👀 when it picks a request up. Because it posts with
-`GITHUB_TOKEN`, its own comments cannot re-trigger the workflow — there is no
-self-review loop.
-
----
-
-## The taste pass: vibe slop, and restraint
-
-Most review tools ask "is this correct?". That question misses the thing that
-actually degrades a codebase, because slop is never locally wrong. Every piece
-is individually plausible — a button that works, an endpoint that responds. The
-damage only shows in aggregate: in the seams, in the sixth month, in the
-incident review.
-
-**Vibe slop is what accumulates when the cost of generating software collapses
-to near zero while the cost of deciding — what to build, why, and how it coheres
-— does not.** A model emits a couple of thousand lines from one prompt; a person
-makes a handful of genuinely good architectural decisions in a day. When
-generation outruns judgement by three orders of magnitude, the gap fills with
-un-made decisions wearing the costume of code.
-
-It shows up in layers, and only the third is what people usually mean by "code
-quality":
-
-| Layer            | What it looks like                                                                                           |
-| ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Product**      | Features added because they were promptable, not needed. No kill criteria, no prioritisation.                |
-| **UX**           | Every session invents its own conventions. Four button styles, three date formats.                           |
-| **Code**         | Duplicated logic instead of reuse, dead code never removed, a thousand lines where a hundred would do.       |
-| **Architecture** | No coherent data model. Security checks present in some paths and absent in structurally identical siblings. |
-| **Epistemic**    | Nobody alive understands the system. Every future change is archaeology.                                     |
-
-The diagnostic question is never _"did an AI write this?"_ — a reviewed,
-well-specified 5,000-line generated patch can be sound, and fifty unjustified
-hand-written lines can be slop. It is:
-
-> **Was this complexity deliberately chosen, independently verified, integrated
-> with the surrounding system, and accepted by someone able to own its
-> consequences?**
-
-The taste pass asks exactly that, and it is the reason the action reads your
-whole repository rather than just the diff — you cannot detect reinvention,
-inconsistency or a missing sibling check from a diff alone.
-
-**What it reports:** reinvention of code that already exists (cited by
-`path:line`), inconsistency with the conventions around it, structural
-asymmetry where a sibling path has a check this one lacks, unrequested
-abstractions, a dependency reached for before the standard library, tests that
-would still pass with the feature deleted, and negative space — the error state
-or the rate limit that a change like this normally carries and this one does not.
-
-**What it will never report**, because getting this wrong is worse than saying
-nothing: input validation at a trust boundary, error handling that prevents data
-loss, security controls, and accessibility basics. Simplicity is never a reason
-to remove those. Nor will it flag a shortcut that already records its own
-ceiling — a comment like `// ponytail: global lock, per-account if throughput
-matters` is a decision, and the opposite of slop.
-
-Every taste finding is judged by its own skeptic, because the defect skeptic
-("can you name the input that triggers a crash?") would destroy all of them by
-construction. The taste skeptic asks a different question: does the thing you
-cite actually exist, and is the convention you claim really the convention here?
-
-The restraint half of this pass condenses the
-[ponytail rules by Dietrich Gebert](https://github.com/dietrichgebert/ponytail) —
-a lazy-senior-developer ladder that stops at the first rung that holds: does this
-need to exist, is it already in the codebase, does the standard library do it,
-does the platform do it natively, can it be one line. Used with credit and worth
-reading in full.
-
-It is on by default. Turn it off with `taste: false`.
-
----
-
-## Panel review: several labs, one review
-
-Models from different labs fail differently. Asking one model twice mostly gets
-you the same blind spot twice; asking two labs gets you two different ones.
-
-```yaml
-with:
-  api-key: ${{ secrets.OPENROUTER_KEY }}
-  base-url: https://openrouter.ai/api/v1
-  model: moonshotai/kimi-k3 # the lead: it reconciles everything at the end
-
-  panel: |
-    model: gpt-5.6
-    base-url: https://api.openai.com/v1
-    api-key: ${{ secrets.OPENAI_KEY }}
-
-    model: claude-sonnet-4-5
-    base-url: https://api.anthropic.com/v1
-    api-key: ${{ secrets.ANTHROPIC_KEY }}
-```
-
-Blank-line-separated blocks of `key: value`, accepting `model`, `base-url`,
-`api-key` and `label`. A block that leaves out `base-url` inherits the lead's —
-and its key with it — so a second model on the same provider is one line:
-
-```yaml
-panel: |
-  model: moonshotai/kimi-k3-thinking
-```
-
-A block that names its **own** `base-url` must bring its own `api-key`. Keys are
-never inherited across providers, and an entry that tries fails the run rather
-than quietly sending one lab's credential to another.
-
-What happens:
-
-1. **Every model reviews independently**, running the full set of passes.
-2. **Findings are merged.** When two labs land on the same finding, that is
-   recorded rather than deduplicated away — you will see _found independently by
-   kimi-k3 and gpt-5.6_ on the comment, which is the strongest signal a panel
-   produces.
-3. **Each finding is cross-checked by a model that did not find it.** A critic
-   from the same family shares the author's blind spots; one from another lab
-   does not.
-4. **The lead model reconciles.** It merges near-duplicates the key-based merge
-   missed, drops what contradicts better evidence, and ranks the result. It can
-   reword and re-rank but **never relocate** — `path`, `line` and `side` come
-   from the diff and no model is allowed to touch them.
-
-Cost scales linearly with panel size: three models is roughly three reviews plus
-one synthesis call.
-
----
-
-## Depth
-
-`depth` is the single dial. Everything else has a sensible default derived from
-it, and any input you set explicitly still wins.
-
-| `depth`    | What it does                                                                                 | Cost                      |
-| ---------- | -------------------------------------------------------------------------------------------- | ------------------------- |
-| `quick`    | Diff only, no repository access, one pass, medium severity and above.                        | Lowest, a few requests.   |
-| `standard` | Repository context, one pass, everything above nits. **Default.**                            | A handful of requests.    |
-| `thorough` | Four review perspectives, deep investigation, three independent verifiers per finding, nits. | Several times `standard`. |
-
-```yaml
-with:
-  depth: thorough
-```
-
-`thorough` runs four passes — general, security, concurrency and resources, and
-integration — because a pass told to care about exactly one thing finds what a
-generic pass skims past. Each surviving finding is then attacked by three
-independent verifiers, and needs a majority to be posted.
-
----
-
-## Codebase context
-
-A diff cannot tell you what the function you are calling actually returns, or
-who else depends on the thing you just changed. So the action fetches the
-repository at the head commit (one request, never executed) and the model
-investigates it for itself with four read-only tools — `search`, `read_file`,
-`list_files`, `find_definition` — for up to `agent-turns` turns. It follows what
-it becomes suspicious of, then hands the reviewer a briefing. The tools cannot
-write, run a shell, or reach the network.
-
-**Tool calling is required.** This is the one place the action expects a
-capable, current endpoint: a model that cannot drive tools is rejected with a
-clear error rather than quietly downgraded to a diff-only review that would look
-the same but see far less. Any mainstream model in 2026 qualifies.
-
-**Project rules are read and treated as binding**, on every run, whatever the
-investigation turns up. `AGENTS.md`, `CLAUDE.md`,
-`CONVENTIONS.md`, `CONTRIBUTING.md`, `.cursorrules`, `.windsurfrules`,
-`.cursor/rules/*`, and `.github/copilot-instructions.md` — at the repository
-root and in every directory on the path to a changed file, so
-`src/api/AGENTS.md` applies to changes under `src/api/`. `@imports` inside those
-files are followed, so an `AGENTS.md` that pulls in six standards documents
-works. Code that violates a documented rule is reported as a finding.
-
-Set `repo-context: off` to review the diff alone.
-
----
-
-## Inputs
-
-### Required
-
-| Input     | Description                                             |
-| --------- | ------------------------------------------------------- |
-| `api-key` | Key for the endpoint. Always a secret, never a literal. |
-| `model`   | Model id, as your provider names it.                    |
-
-### Connection
-
-| Input               | Default                     | Description                                                             |
-| ------------------- | --------------------------- | ----------------------------------------------------------------------- |
-| `base-url`          | `https://api.openai.com/v1` | Endpoint base, including the version path.                              |
-| `github-token`      | `${{ github.token }}`       | Needs `pull-requests: write`.                                           |
-| `temperature`       | `0.1`                       | Dropped automatically if the model rejects it.                          |
-| `max-output-tokens` | `16000`                     | Per response. Reasoning models spend this on thinking before answering. |
-| `json-mode`         | `auto`                      | `on`, `off`, or `auto` to try and fall back.                            |
-| `request-timeout`   | `180`                       | Seconds per model request.                                              |
-
-### Depth and context
-
-| Input                | Default      | Description                                                       |
-| -------------------- | ------------ | ----------------------------------------------------------------- |
-| `depth`              | `standard`   | `quick`, `standard` or `thorough`. Sets the defaults below.       |
-| `repo-context`       | from `depth` | `auto` investigates the repository; `off` reviews the diff alone. |
-| `agent-turns`        | from `depth` | Investigation turns before the agent must report back.            |
-| `review-passes`      | from `depth` | 1–4 perspectives: general, security, concurrency, integration.    |
-| `max-related-tokens` | from `depth` | Ceiling on codebase context sent alongside the diff.              |
-| `context-lines`      | from `depth` | Real surrounding source shown around each hunk. `0` disables.     |
-| `instructions`       | —            | Extra guidance appended to the system prompt.                     |
-
-### What gets reviewed
-
-| Input                 | Default      | Description                                                       |
-| --------------------- | ------------ | ----------------------------------------------------------------- |
-| `include`             | —            | Newline-separated globs. When set, only these files are reviewed. |
-| `ignore`              | —            | Newline-separated globs, added to the built-in list.              |
-| `use-default-ignores` | `true`       | Skip lockfiles, build output, vendored and generated code.        |
-| `max-files`           | `60`         | Cap on changed files.                                             |
-| `max-file-bytes`      | `400000`     | Above this the diff is reviewed but not widened with context.     |
-| `max-input-tokens`    | from `depth` | Approximate ceiling for the whole review.                         |
-| `chunk-tokens`        | from `depth` | Approximate ceiling per request.                                  |
-| `concurrency`         | `4`          | In-flight model requests.                                         |
-
-Anything skipped or dropped is listed in the summary comment. The action never
-silently truncates a review.
-
-### What gets posted
-
-| Input                  | Default                     | Description                                                   |
-| ---------------------- | --------------------------- | ------------------------------------------------------------- |
-| `max-findings`         | from `depth`                | Kept before verification, most severe first.                  |
-| `min-severity`         | from `depth`                | `critical`, `high`, `medium`, `low` or `nit`.                 |
-| `refute`               | `true`                      | Adversarial pass that tries to disprove each finding.         |
-| `refute-votes`         | from `depth`                | Independent verifiers per finding; survives on a majority.    |
-| `inline-comments`      | `true`                      | Off puts everything in the summary instead.                   |
-| `summary-mode`         | `sticky`                    | `sticky` updates one comment, `new` each run, `off` skips it. |
-| `suggestions`          | `true`                      | Render fixes as committable GitHub suggestion blocks.         |
-| `fail-on`              | `none`                      | Fail the step at or above this severity.                      |
-| `dry-run`              | `false`                     | Do everything except write to the pull request.               |
-| `trigger-phrase`       | `@commitreview`             | Mention phrase.                                               |
-| `allowed-associations` | `OWNER,MEMBER,COLLABORATOR` | Who may trigger by comment. `ANY` disables the gate.          |
-| `pr-number`            | —                           | Review a specific PR regardless of the event.                 |
-
-### Outputs
-
-| Output          | Description                                |
-| --------------- | ------------------------------------------ |
-| `findings`      | Number of findings posted.                 |
-| `findings-json` | Path to a JSON file with the full payload. |
-| `summary`       | The markdown summary that was posted.      |
-| `reviewed`      | `true` when a review ran.                  |
-
----
-
-## Providers
-
-Any endpoint serving `POST {base-url}/chat/completions` works. `base-url` must
-include the version path.
-
-| Provider         | `base-url`                                      |
-| ---------------- | ----------------------------------------------- |
-| OpenAI           | `https://api.openai.com/v1`                     |
-| OpenRouter       | `https://openrouter.ai/api/v1`                  |
-| Ollama Cloud     | `https://ollama.com/v1`                         |
-| DeepSeek         | `https://api.deepseek.com/v1`                   |
-| Together         | `https://api.together.xyz/v1`                   |
-| Groq             | `https://api.groq.com/openai/v1`                |
-| Mistral          | `https://api.mistral.ai/v1`                     |
-| Anthropic        | `https://api.anthropic.com/v1`                  |
-| Azure OpenAI     | `https://{resource}.openai.azure.com/openai/v1` |
-| vLLM / llama.cpp | `http://your-host:8000/v1`                      |
-
-Providers disagree about `response_format`, `temperature` and `max_tokens`.
-commitreview probes: when an endpoint rejects one with a 400, it drops or renames
-the parameter, retries, and remembers for the rest of the run.
-
-**Structured replies use a JSON schema when the endpoint offers one.** Every
-structured request carries an OpenAI [Structured
-Outputs](https://platform.openai.com/docs/guides/structured-outputs) schema and
-degrades on its own: `json_schema` (the model is constrained to the schema) →
-plain `json_object` mode → prompt-only. Whichever rung it lands on, JSON is still
-recovered from the response text — fenced blocks, prose, `<think>` output, and
-responses cut off by a token limit — so nothing depends on the endpoint honouring
-the schema. The schemas live in `src/schema.js`; the prompt describes the same
-shape as a fallback, and a test fails if the two drift.
-
-Tool calling is **not** probed-and-dropped like the parameters above — it is
-required. An endpoint that cannot drive tools is rejected, because the
-investigation depends on it (see [Codebase context](#codebase-context)).
-
-[Anthropic serves an OpenAI-compatible layer](https://docs.claude.com/en/api/openai-sdk)
-at `https://api.anthropic.com/v1`, with the caveat that prompt caching and
-extended thinking need their native API.
-
-**Self-hosted models** need a runner that can reach them. Use a self-hosted
-runner and point `base-url` at your server. Most local servers ignore the key,
-but the input is required, so pass any placeholder.
-
-**Your ChatGPT (Codex) subscription — planned.** A design to pay for reviews
-with a ChatGPT Pro/Plus subscription (`model: codex`) instead of a metered key,
-via the same OAuth device flow the Codex CLI uses, is written up in
-[docs/codex-chatgpt-auth.md](docs/codex-chatgpt-auth.md). It is **not built
-yet** — the doc exists so the flow and its constraints (the ChatGPT endpoint is
-the Responses API, not `chat/completions`; a GitHub Action cannot store its own
-secret on the default token) can be reviewed first.
-
----
-
-## Recipes
-
-**Give it your conventions.** It already reads `AGENTS.md` and friends; this is
-for guidance that does not belong in the repository.
-
-```yaml
-with:
-  instructions: |
-    This is a Rails monolith. Flag anything that queries inside a loop.
-    All money is in integer pence — flag float arithmetic on money.
-```
-
-**Block the merge on serious findings.**
-
-```yaml
-with:
-  depth: thorough
-  fail-on: high
-```
-
-**Keep it cheap on a big repository.**
-
-```yaml
-with:
-  depth: quick
-  max-files: 20
-  min-severity: medium
-```
-
-**Use the results in a later step.**
-
-```yaml
-- uses: dymoo/commitreview@v1
-  id: review
-  with: { api-key: ${{ secrets.LLM_API_KEY }}, model: moonshotai/kimi-k3 }
-- run: jq '.findings[] | .severity' "${{ steps.review.outputs.findings-json }}"
-```
-
-More complete workflows are in [`examples/workflows`](examples/workflows).
-
----
+Text after `@commitreview` is always review guidance. v2 does not implement a
+chat mode.
 
 ## How it works
 
-**Context assembly.** GitHub's diff gives three lines of context around each
-hunk, which is rarely enough to judge whether something is a bug. commitreview
-widens every hunk with real source from the head commit and renders each line
-with its old and new line numbers in explicit columns. Widened lines are marked
-`~` and the model is told they are not commentable. Files are packed into
-requests up to a token budget; oversized files split at hunk boundaries.
+1. The action downloads the pull request diff and the repository snapshot at
+   the head commit. It never checks out or executes pull request code.
+2. Changed files are filtered through built-in ignores plus your `ignore`
+   patterns. Hunks are widened with surrounding source and rendered with
+   explicit old/new line numbers.
+3. The model investigates the non-ignored pull request head with bounded
+   read-only tools. Repository instruction files such as `AGENTS.md`,
+   `CLAUDE.md` and scoped equivalents are read from the trusted base commit, so
+   a pull request cannot rewrite its own review policy.
+4. One review pass looks for defects and evidenced repository-fit problems.
+   Fit findings must cite the existing helper, sibling or written rule they are
+   measured against. Validation, security, accessibility and data-loss
+   prevention remain load-bearing.
+5. A skeptic tries to refute every candidate. Surviving locations are validated
+   against the parsed diff; a model can reword a finding but cannot choose an
+   invalid anchor.
+6. New findings are posted inline. Unanchorable findings move to one sticky
+   summary, and stable fingerprints prevent repeats after rebases.
 
-**Anchoring.** GitHub rejects an entire review with a 422 if any comment names a
-line that is not part of the diff — the most common failure in tools like this.
-Every model claim is validated against the exact set of `(line, side)` pairs
-parsed from the diff. A near miss snaps to the closest changed line within three
-lines of the same hunk and is labelled as such. Anything unanchorable is demoted
-into the summary rather than dropped, and a snapped anchor never gets a
-committable suggestion, since it would replace the wrong line. If a batched
-review is still rejected, comments are retried individually so one bad anchor
-cannot lose the rest.
+The repository-fit guidance condenses the
+[ponytail rules](https://github.com/dietrichgebert/ponytail) by Dietrich
+Gebert: prefer deletion, reuse, the standard library and the platform before
+adding another abstraction. A `// ponytail:` comment that states a shortcut's
+ceiling and upgrade path records a deliberate trade-off.
 
-**Refutation.** A reviewer's failure mode is not missing bugs, it is inventing
-them. Each finding goes to independent skeptics holding a kill mandate — they
-are asked to destroy the claim, not to rate it, and to default to "not real"
-when unsure. They are denied the finder's severity and confidence, because those
-anchor, and across multiple votes each is given a deliberately different slice of
-context so they fail independently rather than agreeing on the same paragraph.
+## Inputs
 
-**Prompting.** The review prompt states the criteria a finding must _pass_
-rather than a list of things not to report, because models systematically
-underweight negation and a "do not report style issues" line is the weakest
-sentence in a prompt.
+| Input          | Required | Meaning                                                              |
+| -------------- | -------- | -------------------------------------------------------------------- |
+| `api-key`      | yes      | Secret for the OpenAI-compatible endpoint.                           |
+| `base-url`     | yes      | API root including its version path; there is no fallback URL.       |
+| `model`        | yes      | Provider model id.                                                   |
+| `github-token` | no       | GitHub token; defaults to `${{ github.token }}`.                     |
+| `instructions` | no       | Extra trusted repository-specific review guidance.                   |
+| `ignore`       | no       | Newline-separated globs added to the built-in generated/vendor list. |
 
-**The discussion so far** — the pull request description, commit subjects, review
-comments and inline threads — goes to the model, so it does not re-raise a point
-the thread settled three days ago.
+Outputs are `reviewed` (`true` or `false`) and `findings` (the number that
+survived verification).
 
-**Idempotency.** Every comment carries a fingerprint of the path, the finding,
-and the _text_ of the line it points at — not the line number. A rebase or an
-edit above the finding does not make it look new, so re-running on a new push
-adds only what is genuinely new. The summary is one comment updated in place.
-
----
-
-## Security
-
-**Your key never leaves your runner.** There is no hosted service. The action
-talks to GitHub and to the endpoint you configure, and nothing else.
-
-**No code from the pull request is executed.** The repository is read, never
-run. This is why `pull_request_target` is safe with commitreview — but only as
-long as your workflow does not also check out the head ref. Do not add
-`actions/checkout` of the head ref to a `pull_request_target` workflow.
-
-**The agent is read-only by construction.** Four tools that read; no shell, no
-network, no writes, and a turn cap. Paths excluded by `ignore` are invisible to
-it, and it cannot escape the extracted repository root.
-
-**Comment triggers are gated by author association.** By default only owners,
-members and collaborators can spend your key, and `pr-number` cannot be used to
-step around that gate.
-
-**The automatic trigger is not gated, by design.** On a public repository,
-`pull_request_target` means anyone who opens a pull request causes a review, and
-that spends your key. Gate the job if that is not what you want:
+Example project guidance:
 
 ```yaml
-jobs:
-  review:
-    if: contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+with:
+  api-key: ${{ secrets.LLM_API_KEY }}
+  base-url: https://openrouter.ai/api/v1
+  model: your-provider/model-id
+  instructions: |
+    Money is stored as integer minor units.
+    Every webhook handler must be idempotent.
+  ignore: |
+    private/**
+    **/*.pem
 ```
 
-**Prompt injection.** Diffs, discussion and file contents are untrusted input
-and are labelled as such to the model, which is told to treat them as data and
-to report injection attempts as a high-severity finding. No instruction is a
-guarantee — treat findings as advice, not as a gate you never look at.
+Limits for context, files, requests, findings, concurrency and timeouts are
+fixed product decisions. Changing one affects cost, reliability or safety, so
+it happens in a reviewed release rather than in every consumer workflow.
 
-Full threat model in [SECURITY.md](SECURITY.md).
+## Provider contract
 
----
+The endpoint must expose:
 
-## Cost
+```text
+POST {base-url}/chat/completions
+Authorization: Bearer {api-key}
+```
 
-`standard` on a typical 300-line pull request is a handful of requests. `depth:
-thorough` multiplies that by the number of passes and verifiers, and the
-codebase investigation adds a turn per lookup. It is your key, so the dial is
-yours.
+It must support OpenAI-style function tools. Tool calling is required: an
+endpoint that rejects tools fails clearly rather than producing a diff-only
+review that looks complete.
 
-Reviews trigger on `synchronize`, so a branch pushed ten times is reviewed ten
-times. The `concurrency` block in the quick start cancels superseded runs. To
-review only on demand, drop the `pull_request_target` trigger and use mentions.
+Structured Outputs are used when supported. Endpoints vary on
+`response_format`, `max_tokens` and `temperature`, so commitreview adapts those
+optional parameters when an endpoint explicitly rejects them. Tool calling is
+never dropped.
 
----
+v2 supports API-key authentication only. ChatGPT subscription OAuth and Codex
+account tokens are intentionally deferred; the decision and reconsideration
+criteria are in
+[docs/codex-chatgpt-auth.md](docs/codex-chatgpt-auth.md).
+
+## Security and data flow
+
+The action makes requests only to GitHub's API and your configured `base-url`.
+The model may receive:
+
+- pull request title, description and focused mention text
+- changed hunks and surrounding source from non-ignored files
+- repository instruction documents
+- non-ignored files the investigation chooses to read
+
+All model and GitHub keys are masked immediately. Repository code is read from a
+temporary snapshot and never executed; the snapshot is removed after context
+collection. Agent tools cannot write, spawn a shell, use the network or escape
+the snapshot; symlink targets are resolved and checked before reads.
+
+`pull_request_target` is safe only while your workflow also avoids checking out
+or executing the pull request head. Do not add a head-ref checkout to the quick
+start workflow.
+
+On public repositories, every pull request update can spend your model key.
+Comment-triggered runs are restricted to owners, members and collaborators.
+See [SECURITY.md](SECURITY.md) for the full threat model.
+
+## Migrating from v1
+
+v2 is intentionally breaking. Set `base-url` explicitly and remove every input
+except the six listed above. The following v1 surfaces were removed:
+
+- chat replies and review-thread conversations
+- multi-model panels and synthesis
+- depth presets, separate lenses and the separate taste pass
+- configurable budgets, passes, severities, verifier votes and posting modes
+- suggestions, dry-run, status-gate failure modes and JSON output files
+- manual pull request numbers, trigger phrases and author-gate overrides
+
+Repository investigation, evidence-based restraint and verification are always
+on. If those semantics are not wanted, stay on `dymoo/commitreview@v1`; the
+moving `v1` tag is not changed by the v2 release.
 
 ## Development
 
 ```bash
 npm install
-npm test          # node:test, no network
-npm run check-all # format, lint, typecheck, tests
+npm run check-all
 ```
 
-`src/` is plain ESM with JSDoc types. With no build step there is no compiler to
-lean on, so the checks are assembled explicitly: Prettier for formatting, ESLint
-for correctness and JSDoc validity, and `tsc --checkJs` reading those JSDoc
-annotations as real types. No runtime dependencies — `action.yml` runs
-`src/index.js` directly.
+Runtime code has no third-party dependencies. Tests use `node:test`, make no
+external network requests, and exercise the real entrypoint against local stub
+APIs.
 
-| File              | Responsibility                                        |
-| ----------------- | ----------------------------------------------------- |
-| `src/index.js`    | Orchestration and mode dispatch                       |
-| `src/config.js`   | Inputs, depth presets, lenses, event resolution       |
-| `src/github.js`   | REST client                                           |
-| `src/repo.js`     | Repository access at the head commit                  |
-| `src/diff.js`     | Diff parsing and comment anchoring                    |
-| `src/context.js`  | File selection, context widening, chunking            |
-| `src/codebase.js` | Symbol extraction, repository scan, project rules     |
-| `src/agent.js`    | Read-only tools and the bounded investigation loop    |
-| `src/chat.js`     | Conversational replies                                |
-| `src/llm.js`      | OpenAI-compatible client, defensive JSON              |
-| `src/review.js`   | Prompts, find pass, refute pass                       |
-| `src/post.js`     | Fingerprinting, dedupe, comment and summary rendering |
+| File              | Responsibility                                |
+| ----------------- | --------------------------------------------- |
+| `src/index.js`    | Orchestration                                 |
+| `src/config.js`   | Six inputs, fixed limits and event resolution |
+| `src/prompts.js`  | Review and verifier instructions              |
+| `src/schema.js`   | Structured model reply contracts              |
+| `src/review.js`   | Finding and verification passes               |
+| `src/findings.js` | Normalisation, merging and fingerprints       |
+| `src/diff.js`     | Diff parsing and comment anchoring            |
+| `src/context.js`  | Filtering, widening and chunking              |
+| `src/codebase.js` | Base-commit repository instruction documents  |
+| `src/agent.js`    | Read-only tools and bounded investigation     |
+| `src/repo.js`     | Immutable repository snapshot access          |
+| `src/llm.js`      | OpenAI-compatible client and defensive JSON   |
+| `src/github.js`   | GitHub REST client                            |
+| `src/post.js`     | Comment and sticky-summary rendering          |
+| `src/core.js`     | Small dependency-free Actions runtime adapter |
 
-Conventions, invariants and the rules this repository enforces on itself are in
-[AGENTS.md](AGENTS.md) — which commitreview reads when reviewing its own pull
-requests, so it is worth keeping honest.
-
-Issues and pull requests welcome. If you are changing anchoring, chunking or
-JSON extraction, add a case to the tests — those three are where this class of
-tool breaks.
-
-## Credits
-
-The restraint half of the taste pass condenses the
-[ponytail rules by Dietrich Gebert](https://github.com/dietrichgebert/ponytail).
-
-The adversarial structure — kill mandates, context asymmetry between verifiers,
-and cross-model critics — follows the refute-or-promote literature on
-high-precision LLM defect discovery.
-
-## License
-
-MIT
+Licensed under [MIT](LICENSE).

@@ -69,6 +69,5 @@ export const CONFIG = {
   chunkTokens: 30000,
   maxInputTokens: 120000,
   maxFiles: 60,
-  include: [],
   ignore: [],
 };

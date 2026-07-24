@@ -1,75 +1,51 @@
 /**
- * Turning findings into pull request comments, idempotently.
- *
- * Re-running on a new push must not repeat what has already been said. Every
- * comment carries a fingerprint derived from the path, the finding title and
- * the *text* of the line it points at — not the line number — so a finding
- * survives a rebase or an unrelated edit above it without being re-posted.
+ * Render and post verified findings idempotently.
  */
 import * as core from './core.js';
 import { severityRank, BOT_SIGNATURE } from './config.js';
 
 export const SUMMARY_MARKER = '<!-- commitreview:summary -->';
+const MAX_NOT_REVIEWED = 10;
+const RESERVED_MARKER = /<!--\s*commitreview:[\s\S]*?-->/gi;
 
 const SEVERITY_ICON = {
   critical: '🛑',
   high: '🔴',
   medium: '🟠',
   low: '🟡',
-  nit: '⚪',
 };
 
-function fence(content) {
-  const longest = (content.match(/`{3,}/g) || []).reduce((n, s) => Math.max(n, s.length), 2);
-  return '`'.repeat(Math.max(3, longest + 1));
-}
+export function commentBody(finding, anchor) {
+  const parts = [
+    `${SEVERITY_ICON[finding.severity] || '•'} **${finding.severity}** · ${finding.category}`,
+    '',
+    `**${escapeInline(finding.title)}**`,
+    '',
+    safeModelMarkdown(finding.body, 4000),
+  ];
 
-export function commentBody(finding, anchor, config) {
-  const icon = SEVERITY_ICON[finding.severity] || '•';
-  const parts = [`${icon} **${finding.severity}** · ${finding.category}`, '', `**${finding.title}**`, '', finding.body];
-
-  // A snapped anchor points near the finding, not exactly at it — a committable
-  // suggestion there would replace the wrong line.
-  if (config.suggestions && finding.suggestion && anchor.side === 'RIGHT' && !anchor.snapped) {
-    const f = fence(finding.suggestion);
-    parts.push('', `${f}suggestion\n${finding.suggestion.replace(/\n$/, '')}\n${f}`);
-  }
   if (anchor.snapped) {
     parts.push('', `<sub>Anchored to the nearest changed line; the model referenced line ${finding.line}.</sub>`);
   }
-  if (finding.refutation) parts.push('', `<sub>Verifier: ${finding.refutation}</sub>`);
-
-  // Independent agreement across labs is the strongest signal a panel produces,
-  // so it belongs on the comment rather than buried in the summary.
-  const found = finding.foundBy || [];
-  const attribution =
-    found.length > 1
-      ? `found independently by ${found.join(' and ')}`
-      : found.length === 1
-        ? `found by ${found[0]}`
-        : '';
-  parts.push(
-    '',
-    `<sub>commitreview · confidence ${finding.confidence.toFixed(2)}${attribution ? ` · ${attribution}` : ''}</sub>`,
-  );
-  parts.push(`<!-- commitreview:fp=${finding.fp} -->`);
+  if (finding.refutation) parts.push('', `<sub>Verifier: ${escapeHtml(finding.refutation)}</sub>`);
+  parts.push('', '<sub>commitreview</sub>', `<!-- commitreview:fp=${finding.fp} -->`);
   return parts.join('\n');
 }
 
 export function renderSummary(result, config) {
-  const { pr, posted, demoted, duplicates, skipped, dropped, summaries, refuted, usage, reviewedFiles } = result;
-  const all = [...posted, ...demoted];
+  const { pr, anchored, demoted, duplicates, skipped, dropped, summaries, refuted, usage, reviewedFiles } = result;
+  const all = [...anchored, ...demoted];
   const out = [SUMMARY_MARKER, '', '## commitreview'];
 
-  const blurb = summaries.filter(Boolean).join('\n\n');
+  const blurb = safeModelMarkdown(summaries.filter(Boolean).join('\n\n'), 5000);
   if (blurb) out.push('', blurb);
 
   const counts = {};
-  for (const f of all) counts[f.severity] = (counts[f.severity] || 0) + 1;
+  for (const finding of all) counts[finding.severity] = (counts[finding.severity] || 0) + 1;
   const countText =
     Object.entries(counts)
       .sort((a, b) => severityRank(a[0]) - severityRank(b[0]))
-      .map(([s, n]) => `${SEVERITY_ICON[s] || '•'} ${n} ${s}`)
+      .map(([severity, count]) => `${SEVERITY_ICON[severity] || '•'} ${count} ${severity}`)
       .join(' · ') || 'no findings';
 
   out.push(
@@ -79,9 +55,13 @@ export function renderSummary(result, config) {
 
   if (all.length) {
     out.push('', '| | Severity | Finding | Location |', '|---|---|---|---|');
-    for (const f of all.sort((a, b) => severityRank(a.severity) - severityRank(b.severity))) {
-      const loc = f.anchor ? `\`${f.path}:${f.anchor.line}\`` : `\`${f.path}\``;
-      out.push(`| ${SEVERITY_ICON[f.severity] || '•'} | ${f.severity} | ${escapeCell(f.title)} | ${loc} |`);
+    for (const finding of all.sort((a, b) => severityRank(a.severity) - severityRank(b.severity))) {
+      const location = finding.anchor
+        ? `\`${displayPath(finding.path)}:${finding.anchor.line}\``
+        : `\`${displayPath(finding.path)}\``;
+      out.push(
+        `| ${SEVERITY_ICON[finding.severity] || '•'} | ${finding.severity} | ${escapeCell(escapeInline(finding.title))} | ${location} |`,
+      );
     }
   } else {
     out.push('', 'No defects found in this diff.');
@@ -93,8 +73,8 @@ export function renderSummary(result, config) {
       '<details><summary>Findings that could not be anchored to a diff line</summary>',
       '',
       ...demoted.map(
-        (f) =>
-          `- **${f.severity}** \`${f.path}\`${f.line ? `:${f.line}` : ''} — ${f.title}\n  ${oneLine(f.body)}\n  <!-- commitreview:fp=${f.fp} -->`,
+        (finding) =>
+          `- **${finding.severity}** \`${displayPath(finding.path)}\`${finding.line ? `:${finding.line}` : ''} — ${escapeInline(finding.title)}\n  ${oneLine(safeModelMarkdown(finding.body, 4000))}\n  <!-- commitreview:fp=${finding.fp} -->`,
       ),
       '',
       '</details>',
@@ -103,11 +83,14 @@ export function renderSummary(result, config) {
 
   const notReviewed = [...skipped, ...dropped];
   if (notReviewed.length) {
+    const visible = notReviewed.slice(0, MAX_NOT_REVIEWED);
+    const remainder = notReviewed.length - visible.length;
     out.push(
       '',
       `<details><summary>Not reviewed (${notReviewed.length})</summary>`,
       '',
-      ...notReviewed.map((s) => `- \`${s.path}\` — ${s.reason}`),
+      ...visible.map((item) => `- \`${displayPath(item.path)}\` — ${escapeInline(item.reason)}`),
+      ...(remainder ? [`- … and ${remainder} more`] : []),
       '',
       '</details>',
     );
@@ -115,9 +98,7 @@ export function renderSummary(result, config) {
 
   const context = result.codebase?.stats;
   const footer = [
-    result.panel?.length > 1 ? `panel: ${result.panel.map((m) => `\`${m}\``).join(', ')}` : `model \`${config.model}\``,
-    config.depth && config.depth !== 'standard' ? `depth ${config.depth}` : null,
-    result.lenses?.length > 1 ? `${result.lenses.length} passes (${result.lenses.join(', ')})` : null,
+    `model \`${displayPath(config.model)}\``,
     context?.toolCalls ? `${context.toolCalls} codebase lookup${context.toolCalls === 1 ? '' : 's'}` : null,
     context?.conventions ? `${context.conventions} rule doc${context.conventions === 1 ? '' : 's'}` : null,
     `${usage.requests} request${usage.requests === 1 ? '' : 's'}`,
@@ -131,8 +112,18 @@ export function renderSummary(result, config) {
   return out.join('\n');
 }
 
-const oneLine = (s) => String(s).replace(/\s+/g, ' ').slice(0, 300);
-const escapeCell = (s) => String(s).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+const oneLine = (value) => String(value).replace(/\s+/g, ' ').slice(0, 300);
+const escapeCell = (value) => String(value).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+const escapeHtml = (value) => neutralize(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escapeInline = (value) => escapeHtml(value).replace(/([\\`*_[\]])/g, '\\$1');
+const displayPath = (value) =>
+  neutralize(value)
+    .replace(/[\r\n]/g, ' ')
+    .replace(/`/g, "'")
+    .slice(0, 240);
+const neutralize = (value) => String(value ?? '').replace(/@/g, '@\u200b');
+const safeModelMarkdown = (value, maxLength) =>
+  neutralize(value).replace(RESERVED_MARKER, '').slice(0, maxLength).trim();
 
 /** Post inline comments as one review, falling back to individual comments on a 422. */
 export async function postInline(gh, ctx, pr, comments) {
@@ -141,35 +132,32 @@ export async function postInline(gh, ctx, pr, comments) {
     await gh.createReview(ctx.owner, ctx.repo, ctx.prNumber, {
       commit_id: pr.head.sha,
       event: 'COMMENT',
-      // The API requires a body for a COMMENT review; the detail is in the summary.
       body: `**commitreview** left ${comments.length} comment${comments.length === 1 ? '' : 's'}.\n${BOT_SIGNATURE}`,
       comments,
     });
     return comments.length;
   } catch (err) {
+    if (err?.status !== 422) throw err;
     core.warning(`Batched review rejected (${err.message}). Retrying comments individually.`);
   }
 
   let posted = 0;
-  for (const c of comments) {
+  for (const comment of comments) {
     try {
       await gh.request('POST', `/repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.prNumber}/comments`, {
-        body: { ...c, commit_id: pr.head.sha },
+        body: { ...comment, commit_id: pr.head.sha },
       });
       posted++;
     } catch (err) {
-      core.warning(`Could not anchor a comment at ${c.path}:${c.line} — ${err.message}`);
+      core.warning(`Could not anchor a comment at ${comment.path}:${comment.line} — ${err.message}`);
     }
   }
   return posted;
 }
 
-export async function upsertSummary(gh, ctx, body, mode) {
-  if (mode === 'off') return null;
-  if (mode === 'sticky') {
-    const existing = await gh.listIssueComments(ctx.owner, ctx.repo, ctx.prNumber);
-    const mine = existing.find((c) => String(c.body || '').includes(SUMMARY_MARKER));
-    if (mine) return gh.updateIssueComment(ctx.owner, ctx.repo, mine.id, body);
-  }
+export async function upsertSummary(gh, ctx, body, issueComments = null) {
+  const comments = issueComments ?? (await gh.listIssueComments(ctx.owner, ctx.repo, ctx.prNumber));
+  const existing = comments.find((comment) => String(comment.body || '').includes(SUMMARY_MARKER));
+  if (existing) return gh.updateIssueComment(ctx.owner, ctx.repo, existing.id, body);
   return gh.createIssueComment(ctx.owner, ctx.repo, ctx.prNumber, body);
 }

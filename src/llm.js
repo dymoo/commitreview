@@ -23,8 +23,7 @@ export class LLM {
     // Identifies this client in findings and in the summary footer.
     this.label = config.label || config.model;
     this.quirks = {
-      jsonMode: config.jsonMode !== 'off',
-      jsonModeForced: config.jsonMode === 'on',
+      jsonMode: true,
       // The strongest JSON rung. Dropped to plain json_object on rejection; only
       // ever attempted when a call actually passes a schema.
       jsonSchema: true,
@@ -164,7 +163,7 @@ export class LLM {
       this.quirks.jsonSchema = false;
       return true;
     }
-    if (this.quirks.jsonMode && !this.quirks.jsonModeForced && /response_format|json_object|json_schema/i.test(t)) {
+    if (this.quirks.jsonMode && /response_format|json_object|json_schema/i.test(t)) {
       core.warning('Endpoint rejected response_format — falling back to prompt-only JSON.');
       this.quirks.jsonMode = false;
       return true;
@@ -184,7 +183,7 @@ export class LLM {
       return true;
     }
     // Some gateways reject json mode without naming it. Try once without.
-    if (this.quirks.jsonMode && !this.quirks.jsonModeForced) {
+    if (this.quirks.jsonMode) {
       this.quirks.jsonMode = false;
       return true;
     }

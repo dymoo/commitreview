@@ -3,17 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readEvent } from '../src/config.js';
+import { readConfig, readEvent, containsPhrase, extractFocus } from '../src/config.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'commitreview-event-'));
 
-function withEvent(eventName, payload, fn) {
-  const file = path.join(tmp, `${Math.random().toString(36).slice(2)}.json`);
-  fs.writeFileSync(file, JSON.stringify(payload));
+function withEnv(values, fn) {
   const saved = { ...process.env };
-  process.env.GITHUB_REPOSITORY = 'o/r';
-  process.env.GITHUB_EVENT_NAME = eventName;
-  process.env.GITHUB_EVENT_PATH = file;
+  Object.assign(process.env, values);
   try {
     return fn();
   } finally {
@@ -21,80 +17,105 @@ function withEvent(eventName, payload, fn) {
   }
 }
 
-const defaults = {
-  prNumber: null,
-  triggerPhrase: '@commitreview',
-  allowedAssociations: ['OWNER', 'MEMBER', 'COLLABORATOR'],
-};
+function withEvent(eventName, payload, fn) {
+  const eventPath = path.join(tmp, `${Math.random().toString(36).slice(2)}.json`);
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+  return withEnv(
+    {
+      GITHUB_REPOSITORY: 'o/r',
+      GITHUB_EVENT_NAME: eventName,
+      GITHUB_EVENT_PATH: eventPath,
+    },
+    fn,
+  );
+}
 
-const comment = (over = {}) => ({
+const comment = (overrides = {}) => ({
   issue: { number: 7, pull_request: {} },
-  comment: { id: 99, body: '@commitreview have a look', author_association: 'OWNER', user: { type: 'User' } },
-  ...over,
+  comment: {
+    id: 99,
+    body: '@commitreview focus on auth',
+    author_association: 'OWNER',
+    user: { type: 'User' },
+  },
+  ...overrides,
 });
 
-test('a mention from a collaborator schedules a review', () => {
-  const ctx = withEvent('issue_comment', comment(), () => readEvent(defaults));
+test('a collaborator mention schedules a focused review', () => {
+  const ctx = withEvent('issue_comment', comment(), readEvent);
   assert.equal(ctx.prNumber, 7);
   assert.equal(ctx.trigger, 'mention');
-  assert.equal(ctx.commentId, 99);
-  assert.equal(ctx.focus, 'have a look');
+  assert.equal(ctx.focus, 'focus on auth');
 });
 
-test('a mention from an outsider is refused', () => {
-  const payload = comment();
-  payload.comment.author_association = 'NONE';
-  const ctx = withEvent('issue_comment', payload, () => readEvent(defaults));
-  assert.match(ctx.skip, /allowed-associations/);
-  assert.equal(ctx.prNumber, undefined);
-});
-
-test('pr-number cannot be used to walk around the author gate', () => {
-  const payload = comment();
-  payload.comment.author_association = 'NONE';
-  const ctx = withEvent('issue_comment', payload, () => readEvent({ ...defaults, prNumber: 7 }));
-  assert.match(ctx.skip, /allowed-associations/);
-});
-
-test('allowed-associations ANY opens the gate deliberately', () => {
-  const payload = comment();
-  payload.comment.author_association = 'NONE';
-  const ctx = withEvent('issue_comment', payload, () => readEvent({ ...defaults, allowedAssociations: ['ANY'] }));
-  assert.equal(ctx.trigger, 'mention');
-});
-
-test('a comment without the trigger phrase, on an issue, or from a bot is ignored', () => {
-  const noPhrase = comment();
-  noPhrase.comment.body = 'looks good to me';
-  assert.match(withEvent('issue_comment', noPhrase, () => readEvent(defaults)).skip, /does not contain/);
-
-  const notPr = comment({ issue: { number: 7 } });
-  assert.match(withEvent('issue_comment', notPr, () => readEvent(defaults)).skip, /not on a pull request/);
+test('comment reviews use a fixed author gate and ignore non-PR comments', () => {
+  const outsider = comment();
+  outsider.comment.author_association = 'NONE';
+  assert.match(withEvent('issue_comment', outsider, readEvent).skip, /not allowed/);
 
   const bot = comment();
   bot.comment.user.type = 'Bot';
-  assert.match(withEvent('issue_comment', bot, () => readEvent(defaults)).skip, /bot/);
+  assert.match(withEvent('issue_comment', bot, readEvent).skip, /bot/);
+
+  assert.match(withEvent('issue_comment', comment({ issue: { number: 7 } }), readEvent).skip, /not on a pull request/);
 });
 
-test('a review comment is marked so the reaction goes to the right endpoint', () => {
-  const payload = {
-    pull_request: { number: 12 },
-    comment: { id: 5, body: '@commitreview', author_association: 'MEMBER', user: { type: 'User' } },
+test('pull request events run and unrelated events skip', () => {
+  const pull = withEvent('pull_request_target', { pull_request: { number: 3 } }, readEvent);
+  assert.equal(pull.prNumber, 3);
+  assert.equal(pull.trigger, 'pull_request_target');
+  assert.match(withEvent('push', {}, readEvent).skip, /unsupported event/);
+});
+
+test('trigger matching has a boundary and focus is bounded', () => {
+  assert.ok(containsPhrase('hey @COMMITREVIEW please look'));
+  assert.ok(!containsPhrase('@commitreviewer go'));
+  assert.equal(extractFocus('@commitreview check the migration'), 'check the migration');
+  assert.equal(extractFocus('@commitreview'), '');
+});
+
+test('configuration has six public inputs and no URL fallback', () => {
+  const values = {
+    'INPUT_API-KEY': 'model-secret',
+    'INPUT_BASE-URL': 'https://models.example/v1///',
+    INPUT_MODEL: 'reviewer',
+    'INPUT_GITHUB-TOKEN': 'github-secret',
+    INPUT_INSTRUCTIONS: 'Use integer pence.',
+    INPUT_IGNORE: 'private/**\n*.pem',
+    GITHUB_API_URL: 'https://github.example/api/v3/',
   };
-  const ctx = withEvent('pull_request_review_comment', payload, () => readEvent(defaults));
-  assert.equal(ctx.prNumber, 12);
-  assert.equal(ctx.commentIsReview, true);
+  const config = withEnv(values, readConfig);
+  assert.equal(config.baseUrl, 'https://models.example/v1');
+  assert.equal(config.githubApiUrl, 'https://github.example/api/v3');
+  assert.equal(config.instructions, 'Use integer pence.');
+  assert.ok(config.ignore.includes('private/**'));
+
+  const withoutBase = { ...values };
+  delete withoutBase['INPUT_BASE-URL'];
+  assert.throws(
+    () =>
+      withEnv(withoutBase, () => {
+        delete process.env['INPUT_BASE-URL'];
+        return readConfig();
+      }),
+    /base-url.*required/,
+  );
+
+  assert.throws(
+    () => withEnv({ ...values, 'INPUT_BASE-URL': 'file:///tmp/model' }, readConfig),
+    /base-url must be an absolute HTTP\(S\) URL/,
+  );
+  assert.throws(
+    () => withEnv({ ...values, 'INPUT_BASE-URL': 'https://models.example/v1?token=oops' }, readConfig),
+    /must not contain a query string/,
+  );
 });
 
-test('pull request events review the pull request they carry', () => {
-  const ctx = withEvent('pull_request_target', { pull_request: { number: 3 } }, () => readEvent(defaults));
-  assert.equal(ctx.prNumber, 3);
-  assert.equal(ctx.trigger, 'pull_request_target');
-});
-
-test('an unrelated event is skipped unless pr-number says otherwise', () => {
-  assert.match(withEvent('push', {}, () => readEvent(defaults)).skip, /unsupported event/);
-  const forced = withEvent('workflow_dispatch', {}, () => readEvent({ ...defaults, prNumber: 42 }));
-  assert.equal(forced.prNumber, 42);
-  assert.equal(forced.trigger, 'input');
+test('action metadata exposes only the six supported inputs', () => {
+  const action = fs.readFileSync(new URL('../action.yml', import.meta.url), 'utf8');
+  const inputBlock = action.slice(action.indexOf('inputs:'), action.indexOf('\noutputs:'));
+  const names = [...inputBlock.matchAll(/^ {2}([a-z-]+):$/gm)].map((match) => match[1]);
+  assert.deepEqual(names, ['api-key', 'base-url', 'model', 'github-token', 'instructions', 'ignore']);
+  assert.match(inputBlock, /base-url:\n {4}description:[^\n]+\n {4}required: true/);
+  assert.ok(!inputBlock.includes('https://api.openai.com'));
 });

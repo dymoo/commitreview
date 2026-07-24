@@ -26,8 +26,8 @@ jobs:
       (github.event.issue.pull_request && contains(github.event.comment.body, '@commitreview'))
     runs-on: ubuntu-latest
     steps:
-      - uses: dymoo/commitreview@v1
+      - uses: dymoo/commitreview@v2
         with:
           api-key: ${{ secrets.LLM_API_KEY }}
           base-url: https://openrouter.ai/api/v1
-          model: moonshotai/kimi-k3
+          model: your-provider/model-id

@@ -10,14 +10,11 @@ function issue(cmd, message = '') {
 
 export const info = (msg) => process.stdout.write(`${msg}\n`);
 export const debug = (msg) => issue('debug', msg);
-export const notice = (msg) => issue('notice', msg);
 export const warning = (msg) => issue('warning', msg);
 export const error = (msg) => issue('error', msg);
 export const mask = (value) => {
   if (value) issue('add-mask', value);
 };
-export const startGroup = (name) => issue('group', name);
-export const endGroup = () => issue('endgroup');
 
 export function setFailed(msg) {
   error(msg);
@@ -53,35 +50,12 @@ export function getInput(name, fallback = '') {
   return trimmed === '' ? fallback : trimmed;
 }
 
-export function getBool(name, fallback = false) {
-  const v = getInput(name, '');
-  if (v === '') return fallback;
-  if (/^(true|1|yes|on)$/i.test(v)) return true;
-  if (/^(false|0|no|off)$/i.test(v)) return false;
-  throw new Error(`Input "${name}" must be a boolean, got "${v}"`);
-}
-
-export function getNumber(name, fallback) {
-  const v = getInput(name, '');
-  if (v === '') return fallback;
-  const n = Number(v);
-  if (!Number.isFinite(n)) throw new Error(`Input "${name}" must be a number, got "${v}"`);
-  return n;
-}
-
 /** Newline-separated values — for globs, which may legitimately contain commas. */
 export const getLines = (name) =>
   getInput(name, '')
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter((s) => s && !s.startsWith('#'));
-
-/** Comma or newline separated values. */
-export const getCsv = (name, fallback = '') =>
-  getInput(name, fallback)
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
 
 /** Bounded-concurrency map that preserves input order. */
 export async function pmap(items, limit, fn) {

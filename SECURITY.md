@@ -3,59 +3,67 @@
 ## Reporting a vulnerability
 
 Open a [private security advisory](https://github.com/dymoo/commitreview/security/advisories/new).
-Please do not open a public issue for anything exploitable.
+Do not open a public issue for an exploitable report.
 
 ## Threat model
 
-commitreview runs inside your GitHub Actions runner. There is no hosted service,
-no telemetry and no third party. It makes network requests to exactly two places:
-the GitHub API, and the `base-url` you configure.
+commitreview runs inside GitHub Actions. There is no hosted service or
+telemetry. It makes network requests to exactly two configured authorities:
+GitHub's API and the required `base-url`.
 
-**Your API keys** are registered with the runner's secret masker before any
-other work happens, so they cannot appear in logs. This covers every key in a
-`panel`, including ones inherited from the lead model. Each key is sent only to
-its own `base-url`, in an `Authorization` header — a panel member never sees
-another member's key.
+**Credentials.** The model API key and GitHub token are registered with the
+runner's secret masker immediately after they are read. The model key is sent
+only to `base-url` in an `Authorization` header. There is no default or fallback
+model endpoint.
 
-**A panel sends your diff to every provider you list.** That is the point, but
-it is worth saying plainly: three models means three companies receive the code.
+**Data sent to the model.** A review can send the pull request title,
+description and focused mention; changed hunks and surrounding source;
+repository instruction documents from the base commit; and non-ignored
+repository files selected by the read-only investigation. This is intentionally
+broader than the diff.
+Paths matching `ignore` are excluded from file selection, instruction discovery
+and agent tools. The built-in list covers generated, vendored and build output,
+not secrets; add sensitive paths explicitly.
 
-**What is sent to the model:** the changed hunks, surrounding source from the
-changed files, and the pull request title and description. Nothing else from the
-repository. Paths matching `ignore` are never read. If a path must never leave
-the repository, add it to `ignore` — the default list covers lockfiles, build
-output and vendored code, not secrets.
+**Untrusted input.** A pull request author controls code, file names and pull
+request prose that reach the model. Prompts fence these as data, but prompt
+instructions are not a security boundary. Treat findings as untrusted advice
+and never automate merges from them.
 
-**The diff is untrusted input.** A pull request author controls the code, the
-comments and the file names that reach the model. Prompts label the diff as data
-and instruct the model to report injection attempts rather than follow them, but
-no such instruction is a guarantee. Treat findings as advice from an untrusted
-source: read them, do not automate merges on them.
+**Pull request code is never executed.** The action downloads GitHub's repository
+snapshot at the head commit, extracts it to a temporary directory and reads
+files. It does not run, build, install or check out the pull request. Reads
+reject traversal, backslashes and paths outside the snapshot; symlink targets
+are resolved and checked before reading. The temporary snapshot is removed after
+context collection, including on failure.
 
-**No code from the pull request is executed or checked out.** The action reads
-the diff and file contents through the GitHub API. This is why
-`pull_request_target` is safe with commitreview specifically — but only as long
-as your workflow does not also check out the head ref. Do not add
-`actions/checkout` with `ref: ${{ github.event.pull_request.head.sha }}` to a
-`pull_request_target` workflow.
+This makes `pull_request_target` safe for the recommended workflow only while
+that workflow also avoids checking out or executing the pull request head.
 
-**Who can spend your key.** Comment triggers are restricted to the author
-associations in `allowed-associations`, which defaults to owners, members and
-collaborators; a `pr-number` input cannot bypass that gate. The automatic
-`pull_request` / `pull_request_target` trigger is deliberately not gated — on a
-public repository, anyone who opens a pull request causes a review. See
-[Security in the README](README.md#security) for how to gate it.
+**Agent boundary.** The model has only `list_files`, `read_file` and exact-text
+`search`. Calls are bounded and respect ignores. There is no write tool, shell,
+repository-code execution or agent network access. Endpoints that reject tool
+calling fail rather than silently degrading.
 
-**Permissions.** The action needs `contents: read` and `pull-requests: write`.
-It never writes to the repository contents, never pushes, and never approves or
-requests changes on a review — reviews are always submitted as `COMMENT`.
+**Posted model text.** GitHub sanitises rendered Markdown. commitreview also
+neutralises user mentions and strips its reserved fingerprint markers from
+model-authored prose before posting it.
+
+**Who can spend the key.** Automatic `pull_request` and `pull_request_target`
+events are not author-gated; on a public repository, any opened pull request can
+cause a review. The `@commitreview` comment trigger is fixed to repository
+owners, members and collaborators. There is no input that disables that gate.
+
+**Permissions.** The action needs `contents: read` and
+`pull-requests: write`. It never writes repository contents, pushes, approves or
+requests changes. Reviews use the `COMMENT` event.
 
 ## Supply chain
 
-There are no runtime dependencies and no bundled `dist/` — `action.yml` runs
-`src/index.js` directly, so the code you audit is the code that runs. Pin to a
-release tag, or to a commit SHA if you want the strongest guarantee:
+There are no runtime dependencies and no bundled build output. `action.yml`
+runs `src/index.js` directly on Node 20, so the audited source is the executed
+source. Pin an immutable release when required:
 
 ```yaml
-- uses: dymoo/commitreview@v1.0.0
+- uses: dymoo/commitreview@v2.0.0
 ```

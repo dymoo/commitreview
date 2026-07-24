@@ -11,7 +11,9 @@ export class HttpError extends Error {
 }
 
 export class GitHub {
-  constructor(token, { apiUrl = process.env.GITHUB_API_URL || 'https://api.github.com', retries = 3 } = {}) {
+  /** @param {string} token @param {{apiUrl: string, retries?: number}} options */
+  constructor(token, { apiUrl, retries = 3 }) {
+    if (!apiUrl) throw new Error('GitHub API URL is required.');
     this.token = token;
     this.apiUrl = apiUrl.replace(/\/+$/, '');
     this.retries = retries;
@@ -133,20 +135,6 @@ export class GitHub {
     return this.paginate(`/repos/${owner}/${repo}/issues/${number}/comments`);
   }
 
-  /**
-   * Everything humans have already said about this pull request. Reviewing
-   * without it re-raises points the thread settled three days ago.
-   */
-  async getConversation(owner, repo, number) {
-    const [issueComments, reviewComments, reviews, commits] = await Promise.all([
-      this.listIssueComments(owner, repo, number),
-      this.listReviewComments(owner, repo, number),
-      this.paginate(`/repos/${owner}/${repo}/pulls/${number}/reviews`),
-      this.paginate(`/repos/${owner}/${repo}/pulls/${number}/commits`, { max: 250 }),
-    ]);
-    return { issueComments, reviewComments, reviews, commits };
-  }
-
   getTree(owner, repo, sha) {
     return this.request('GET', `/repos/${owner}/${repo}/git/trees/${sha}?recursive=1`).then((r) => r.data);
   }
@@ -178,13 +166,6 @@ export class GitHub {
     );
   }
 
-  /** Reply inside an existing inline review thread. */
-  replyToReviewComment(owner, repo, number, commentId, body) {
-    return this.request('POST', `/repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies`, {
-      body: { body },
-    }).then((r) => r.data);
-  }
-
   createIssueComment(owner, repo, number, body) {
     return this.request('POST', `/repos/${owner}/${repo}/issues/${number}/comments`, { body: { body } }).then(
       (r) => r.data,
@@ -195,18 +176,6 @@ export class GitHub {
     return this.request('PATCH', `/repos/${owner}/${repo}/issues/comments/${commentId}`, { body: { body } }).then(
       (r) => r.data,
     );
-  }
-
-  /** Review comments and issue comments live under different reaction paths. */
-  async addReaction(owner, repo, commentId, { isReviewComment = false, content = 'eyes' } = {}) {
-    const scope = isReviewComment ? 'pulls' : 'issues';
-    try {
-      await this.request('POST', `/repos/${owner}/${repo}/${scope}/comments/${commentId}/reactions`, {
-        body: { content },
-      });
-    } catch {
-      // Purely cosmetic acknowledgement — never fail a review over it.
-    }
   }
 }
 

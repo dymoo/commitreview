@@ -47,11 +47,8 @@ test('selectFiles reports why each file was skipped', () => {
   assert.equal(skipped[0].reason, 'binary');
 });
 
-test('include acts as an allowlist and max-files is reported not silently applied', () => {
+test('max-files is reported rather than silently applied', () => {
   const files = parseDiff(APP_DIFF);
-  assert.equal(selectFiles(files, { ...CONFIG, include: ['docs/**'] }).selected.length, 0);
-  assert.equal(selectFiles(files, { ...CONFIG, include: ['src/**'] }).selected.length, 1);
-
   const capped = selectFiles(files, { ...CONFIG, maxFiles: 0 });
   assert.equal(capped.selected.length, 0);
   assert.match(capped.skipped[0].reason, /max-files/);
@@ -95,6 +92,16 @@ test('a file larger than one request is split into several blocks', () => {
   const blocks = renderFile(file, APP_CONTENT, { ...CONFIG, chunkTokens: 1000 });
   assert.ok(blocks.length >= 1);
   for (const b of blocks) assert.ok(b.tokens <= 1000, `block of ${b.tokens} tokens exceeds the request budget`);
+});
+
+test('one oversized hunk is truncated within the advertised request budget', () => {
+  const source = 'x'.repeat(12000);
+  const file = parseDiff(
+    ['diff --git a/huge.js b/huge.js', '--- /dev/null', '+++ b/huge.js', '@@ -0,0 +1,1 @@', `+${source}`].join('\n'),
+  )[0];
+  const [block] = renderFile(file, source, { ...CONFIG, contextLines: 0, chunkTokens: 1000 });
+  assert.ok(block.tokens <= 1000, `block of ${block.tokens} tokens exceeds the request budget`);
+  assert.match(block.text, /hunk truncated/);
 });
 
 test('chunking packs blocks up to the request budget and drops over the total budget', () => {

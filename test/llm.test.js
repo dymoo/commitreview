@@ -8,7 +8,6 @@ const base = {
   apiKey: 'k',
   temperature: 0.1,
   maxOutputTokens: 100,
-  jsonMode: 'auto',
   requestTimeoutMs: 1000,
 };
 
@@ -147,17 +146,6 @@ test('drops temperature when the model only supports the default', () => {
   assert.equal(llm.buildBody([]).temperature, undefined);
 });
 
-test('json-mode on is never dropped behind the user’s back', () => {
-  const llm = new LLM({ ...base, jsonMode: 'on' });
-  llm.adapt('Unsupported parameter: response_format');
-  assert.deepEqual(llm.buildBody([]).response_format, { type: 'json_object' });
-});
-
-test('json-mode off never sends response_format', () => {
-  const llm = new LLM({ ...base, jsonMode: 'off' });
-  assert.equal(llm.buildBody([]).response_format, undefined);
-});
-
 test('a concurrent adaptation is retried rather than adapted twice', () => {
   // Several requests are in flight on one client. If two hit the same
   // rejection, the second must not strip an unrelated parameter as collateral.
@@ -170,7 +158,8 @@ test('a concurrent adaptation is retried rather than adapted twice', () => {
 });
 
 test('adaptation eventually gives up instead of looping', () => {
-  const llm = new LLM({ ...base, jsonMode: 'off' });
+  const llm = new LLM(base);
+  llm.quirks.jsonMode = false;
   llm.quirks.temperature = false;
   llm.quirks.maxTokensKey = null;
   assert.equal(llm.adapt('some unrelated failure'), false);

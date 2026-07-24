@@ -1,6 +1,6 @@
 {
   "name": "commitreview",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Bring-your-own-key AI code review as a GitHub Action. Works with any OpenAI-compatible endpoint.",
   "type": "module",
   "private": true,

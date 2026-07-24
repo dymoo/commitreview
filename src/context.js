@@ -67,10 +67,6 @@ export function selectFiles(files, config) {
       skipped.push({ path: file.path, reason: 'no textual changes' });
       continue;
     }
-    if (config.include.length && !matchAny(file.path, config.include)) {
-      skipped.push({ path: file.path, reason: 'not in include' });
-      continue;
-    }
     if (matchAny(file.path, config.ignore)) {
       skipped.push({ path: file.path, reason: 'ignored' });
       continue;
@@ -164,7 +160,7 @@ export function renderFile(file, content, config) {
   const blocks = [];
   let current = [];
   let currentTokens = 0;
-  const budget = Math.max(1000, config.chunkTokens - estimateTokens(header) - 32);
+  const budget = Math.max(1, config.chunkTokens - estimateTokens(header) - 32);
 
   const flush = () => {
     if (!current.length) return;
@@ -179,13 +175,14 @@ export function renderFile(file, content, config) {
     if (t > budget) {
       // One hunk larger than a whole request: keep the head of it and say so.
       flush();
-      const keep = Math.floor(budget * 4);
-      const truncated = `${section.slice(0, keep)}\n… hunk truncated (${estimateTokens(section) - budget} tokens dropped) …`;
-      blocks.push({
-        path: file.path,
-        text: `${header} (continued)\n${truncated}`,
-        tokens: estimateTokens(truncated),
-      });
+      const suffix = `… hunk truncated (${t - budget} tokens dropped) …`;
+      const prefix = `${header} (continued)\n`;
+      const keep = Math.max(
+        0,
+        Math.floor((config.chunkTokens - estimateTokens(prefix) - estimateTokens(suffix) - 2) * 4),
+      );
+      const text = `${prefix}${section.slice(0, keep)}\n${suffix}`;
+      blocks.push({ path: file.path, text, tokens: estimateTokens(text) });
       continue;
     }
     if (currentTokens + t > budget) flush();
@@ -203,6 +200,7 @@ export function renderFile(file, content, config) {
 export function buildChunks(rendered, config) {
   const chunks = [];
   const dropped = [];
+  const droppedPaths = new Set();
   let spent = 0;
   let current = { text: '', tokens: 0, paths: [] };
 
@@ -213,7 +211,10 @@ export function buildChunks(rendered, config) {
 
   for (const block of rendered) {
     if (spent + block.tokens > config.maxInputTokens) {
-      dropped.push({ path: block.path, reason: `over max-input-tokens (${config.maxInputTokens})` });
+      if (!droppedPaths.has(block.path)) {
+        droppedPaths.add(block.path);
+        dropped.push({ path: block.path, reason: `over max-input-tokens (${config.maxInputTokens})` });
+      }
       continue;
     }
     if (current.tokens + block.tokens > config.chunkTokens) flush();

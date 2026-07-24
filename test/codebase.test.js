@@ -1,65 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDiff } from '../src/diff.js';
-import { extractSymbols, scanRepository, collectInstructionDocs, renderConventions } from '../src/codebase.js';
-import { DEFAULT_IGNORES } from '../src/config.js';
+import { collectInstructionDocs, renderConventions } from '../src/codebase.js';
 
-/** A repository that lives in an object literal. */
 const fakeRepo = (files) => ({
   kind: 'test',
   list: async () => Object.keys(files),
-  read: async (p) => (p in files ? files[p] : null),
+  read: async (path) => (path in files ? files[path] : null),
 });
 
-const DIFF = [
-  'diff --git a/src/user.js b/src/user.js',
-  '--- a/src/user.js',
-  '+++ b/src/user.js',
-  '@@ -1,3 +1,4 @@',
-  ' import { fetchAccount } from "./account.js";',
-  '-export function loadUser(id) {',
-  '+export function loadUser(id, options) {',
-  '+  validateOptions(options);',
-  '   return fetchAccount(id);',
-].join('\n');
-
-test('separates symbols the change defines from symbols it calls', () => {
-  const { defined, used } = extractSymbols(parseDiff(DIFF));
-  assert.ok(defined.has('loadUser'), 'loadUser is defined by the change');
-  assert.ok(used.has('validateOptions'), 'validateOptions is called by the change');
-  assert.ok(!used.has('loadUser'), 'a symbol the change defines needs no definition lookup');
-  assert.ok(!used.has('if'), 'keywords are not symbols');
-});
-
-test('finds definitions and callers in one pass, skipping the changed file', async () => {
-  const repo = fakeRepo({
-    'src/user.js': 'export function loadUser(id, options) {}',
-    'src/account.js': 'export function fetchAccount(id) {\n  return db.get(id);\n}',
-    'src/options.js': 'export function validateOptions(o) {\n  return o;\n}',
-    'src/routes.js': 'import { loadUser } from "./user.js";\nconst u = loadUser(req.id);\n',
-    'dist/bundle.js': 'function loadUser(){} // build output, must be ignored',
-  });
-
-  const hits = await scanRepository(repo, {
-    wanted: new Set(['loadUser', 'validateOptions', 'fetchAccount']),
-    skipPaths: ['src/user.js'],
-    ignore: DEFAULT_IGNORES,
-  });
-
-  assert.deepEqual(hits.get('validateOptions').defs, [{ path: 'src/options.js', line: 1 }]);
-  assert.deepEqual(hits.get('fetchAccount').defs, [{ path: 'src/account.js', line: 1 }]);
-
-  // The caller of the changed function is the whole point of the scan.
-  const callers = hits.get('loadUser').refs.map((r) => r.path);
-  assert.ok(callers.includes('src/routes.js'));
-  assert.ok(!callers.includes('src/user.js'), 'the changed file itself is skipped');
-  assert.ok(
-    ![...hits.get('loadUser').defs, ...hits.get('loadUser').refs].some((h) => h.path === 'dist/bundle.js'),
-    'ignored paths never reach the model',
-  );
-});
-
-test('collects the instruction files that govern the changed paths', async () => {
+test('collects repository and directory-scoped instructions', async () => {
   const repo = fakeRepo({
     'AGENTS.md': '# Rules\nAll money is integer pence.',
     'CLAUDE.md': '# Claude\nSee @docs/style.md for naming.',
@@ -71,42 +20,39 @@ test('collects the instruction files that govern the changed paths', async () =>
   });
 
   const docs = await collectInstructionDocs(repo, ['src/api/handler.js']);
-  const paths = docs.map((d) => d.path);
-
+  const paths = docs.map((doc) => doc.path);
   assert.ok(paths.includes('AGENTS.md'));
-  assert.ok(paths.includes('src/api/AGENTS.md'), 'rules scoped to the changed directory apply');
-  assert.ok(!paths.includes('src/unrelated/AGENTS.md'), 'rules for untouched directories do not');
+  assert.ok(paths.includes('src/api/AGENTS.md'));
   assert.ok(paths.includes('.cursor/rules/security.mdc'));
-  assert.ok(paths.includes('docs/style.md'), '@imports are followed');
+  assert.ok(paths.includes('docs/style.md'));
+  assert.ok(!paths.includes('src/unrelated/AGENTS.md'));
   assert.ok(!paths.includes('README.md'));
 });
 
-test('instruction imports resolve relatively and survive cycles', async () => {
+test('instruction imports resolve relatively, survive cycles and honour ignores', async () => {
   const repo = fakeRepo({
-    'AGENTS.md': 'See @docs/a.md',
+    'AGENTS.md': 'See @docs/a.md and @private/secret.md',
     'docs/a.md': 'See @./b.md and @../AGENTS.md',
     'docs/b.md': 'the actual rule',
+    'private/secret.md': 'must never reach the model',
   });
-  const docs = await collectInstructionDocs(repo, []);
-  const paths = docs.map((d) => d.path);
+  const docs = await collectInstructionDocs(repo, [], ['private/**']);
+  const paths = docs.map((doc) => doc.path);
   assert.deepEqual(paths.sort(), ['AGENTS.md', 'docs/a.md', 'docs/b.md']);
-  assert.equal(new Set(paths).size, paths.length, 'a cycle must not read a file twice');
+  assert.equal(new Set(paths).size, paths.length);
 });
 
-test('rendered project rules are marked binding and cite each source', async () => {
+test('rendered base-commit rules are evidence and cite their source', async () => {
   const repo = fakeRepo({
     'AGENTS.md': 'All money is integer pence.',
     'src/api/AGENTS.md': 'Every handler must be idempotent.',
   });
-
   const docs = await collectInstructionDocs(repo, ['src/api/handler.js']);
   const text = renderConventions(docs);
   assert.ok(text.includes('All money is integer pence.'));
-  assert.ok(text.includes('Every handler must be idempotent.'), 'directory-scoped rules are included');
-  assert.ok(text.includes('Treat them as binding'));
-  assert.ok(text.includes('AGENTS.md'), 'each rule cites the file it came from');
-});
-
-test('no instruction docs render to nothing, not a crash', () => {
+  assert.ok(text.includes('Every handler must be idempotent.'));
+  assert.ok(text.includes('base commit'));
+  assert.ok(text.includes('evidence'));
+  assert.ok(text.includes('AGENTS.md'));
   assert.equal(renderConventions([]), '');
 });

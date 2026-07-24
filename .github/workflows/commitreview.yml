@@ -1,9 +1,9 @@
-# commitreview reviewing commitreview. Uses the action from this checkout, so a
-# pull request is reviewed by the version it is proposing.
+# commitreview reviewing commitreview. It uses the last released major rather
+# than executing code from the pull request under review.
 name: commitreview
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
   issue_comment:
     types: [created]
@@ -19,23 +19,16 @@ concurrency:
 jobs:
   review:
     if: >-
-      github.event_name == 'pull_request' ||
+      github.event_name == 'pull_request_target' ||
       (github.event.issue.pull_request && contains(github.event.comment.body, '@commitreview'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # The secrets context is not available in an if:, but the env context is —
-      # so a fork PR or a clone without a key skips instead of failing red.
-      - uses: ./
-        if: env.HAS_KEY == 'true'
-        env:
-          HAS_KEY: ${{ secrets.LLM_API_KEY != '' }}
+      - uses: dymoo/commitreview@v2
         with:
           api-key: ${{ secrets.LLM_API_KEY }}
-          base-url: ${{ vars.LLM_BASE_URL || 'https://openrouter.ai/api/v1' }}
-          model: ${{ vars.LLM_MODEL || 'moonshotai/kimi-k3' }}
+          base-url: ${{ vars.LLM_BASE_URL }}
+          model: ${{ vars.LLM_MODEL }}
           instructions: |
-            This action has no runtime dependencies — flag any import that is not
-            from node: or a relative path.
-            Anchoring, chunking and JSON extraction are the load-bearing parts.
-            A change to any of them without a test is a finding.
+            This action has no runtime dependencies. Any import that is not
+            from node: or a relative src/ path is a finding.
+            Anchoring, chunking and JSON extraction require tests when changed.

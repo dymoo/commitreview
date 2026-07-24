@@ -16,6 +16,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import * as core from './core.js';
 
@@ -39,11 +40,11 @@ export function isSafeRepoPath(p) {
  * @property {string} kind
  * @property {() => Promise<string[]>} list repository-relative paths
  * @property {(p: string) => Promise<string|null>} read
+ * @property {() => Promise<void>} close
  */
 
-/** @returns {Promise<Repo|null>} */
-export async function openRepo(gh, { owner, repo, sha, config }) {
-  if (config.repoContext === 'off') return null;
+/** @returns {Promise<Repo>} */
+export async function openRepo(gh, { owner, repo, sha }) {
   try {
     return await tarballRepo(gh, owner, repo, sha);
   } catch (err) {
@@ -52,53 +53,64 @@ export async function openRepo(gh, { owner, repo, sha, config }) {
   }
 }
 
+/** Use the API backend when only a small set of files is expected to be read. */
+export function openRepoViaApi(gh, { owner, repo, sha }) {
+  return apiRepo(gh, owner, repo, sha);
+}
+
 async function tarballRepo(gh, owner, repo, sha) {
-  const dir = await fsp.mkdtemp(path.join(process.env.RUNNER_TEMP || process.env.TMPDIR || '/tmp', 'commitreview-'));
+  const dir = await fsp.mkdtemp(path.join(tmpdir(), 'commitreview-'));
   const archive = path.join(dir, 'repo.tar.gz');
 
-  const { data, size } = await gh.downloadTarball(owner, repo, sha, MAX_TARBALL_BYTES);
-  await fsp.writeFile(archive, data);
-  await extract(archive, dir);
-  await fsp.rm(archive, { force: true });
+  try {
+    const { data, size } = await gh.downloadTarball(owner, repo, sha, MAX_TARBALL_BYTES);
+    await fsp.writeFile(archive, data);
+    await extract(archive, dir);
+    await fsp.rm(archive, { force: true });
 
-  // GitHub wraps everything in a single `owner-repo-sha` directory.
-  const entries = await fsp.readdir(dir, { withFileTypes: true });
-  const top = entries.find((e) => e.isDirectory());
-  if (!top) throw new Error('archive contained no directory');
-  // Resolve the root itself once: the temp directory is commonly reached
-  // through a symlink (/tmp and /var on macOS), so comparing a resolved file
-  // path against an unresolved root would reject every read.
-  const root = await fsp.realpath(path.join(dir, top.name));
-  core.info(`Repository archive extracted (${Math.round(size / 1024)} KiB).`);
+    // GitHub wraps everything in a single `owner-repo-sha` directory.
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    const top = entries.find((entry) => entry.isDirectory());
+    if (!top) throw new Error('archive contained no directory');
+    // Resolve the root itself once: the temp directory is commonly reached
+    // through a symlink (/tmp and /var on macOS), so comparing a resolved file
+    // path against an unresolved root would reject every read.
+    const root = await fsp.realpath(path.join(dir, top.name));
+    core.info(`Repository archive extracted (${Math.round(size / 1024)} KiB).`);
 
-  // Cache the promise, not the result: two concurrent callers must share one
-  // walk rather than both starting their own.
-  let listing = null;
-  return {
-    kind: 'archive',
-    list() {
-      if (!listing) listing = walk(root, root);
-      return listing;
-    },
-    async read(rel) {
-      if (!isSafeRepoPath(rel)) return null;
-      const full = path.resolve(root, rel);
-      if (!full.startsWith(root + path.sep)) return null;
-      try {
-        // A lexical check is not enough: readFile follows symlinks, and a pull
-        // request can add one pointing at /proc/self/environ, which holds this
-        // job's API keys. Resolve the link and re-check before reading.
-        const real = await fsp.realpath(full);
-        if (real !== root && !real.startsWith(root + path.sep)) {
-          core.warning(`Refusing to read ${rel}: it resolves outside the repository.`);
+    // Cache the promise, not the result: two concurrent callers must share one
+    // walk rather than both starting their own.
+    let listing = null;
+    return {
+      kind: 'archive',
+      list() {
+        if (!listing) listing = walk(root, root);
+        return listing;
+      },
+      async read(rel) {
+        if (!isSafeRepoPath(rel)) return null;
+        const full = path.resolve(root, rel);
+        if (!full.startsWith(root + path.sep)) return null;
+        try {
+          // A lexical check is not enough: readFile follows symlinks, and a pull
+          // request can add one pointing at /proc/self/environ, which holds this
+          // job's API keys. Resolve the link and re-check before reading.
+          const real = await fsp.realpath(full);
+          if (real !== root && !real.startsWith(root + path.sep)) {
+            core.warning(`Refusing to read ${rel}: it resolves outside the repository.`);
+            return null;
+          }
+          return await fsp.readFile(real, 'utf8');
+        } catch {
           return null;
         }
-        return await fsp.readFile(real, 'utf8');
-      } catch {
-        return null;
-      }
-    },
-  };
+      },
+      close: () => removeTemp(dir),
+    };
+  } catch (err) {
+    await removeTemp(dir);
+    throw err;
+  }
 }
 
 function extract(archive, into) {
@@ -123,6 +135,7 @@ async function walk(root, dir, out = []) {
 /** Fallback when the archive is unavailable: one tree call, then a fetch per file. */
 function apiRepo(gh, owner, repo, sha) {
   let listing = null;
+  /** @type {Map<string, Promise<string|null>>} */
   const contents = new Map();
   return {
     kind: 'api',
@@ -137,8 +150,22 @@ function apiRepo(gh, owner, repo, sha) {
     },
     async read(rel) {
       if (!isSafeRepoPath(rel)) return null;
-      if (!contents.has(rel)) contents.set(rel, await gh.getFileContent(owner, repo, rel, sha));
-      return contents.get(rel);
+      let content = contents.get(rel);
+      if (!content) {
+        content = gh.getFileContent(owner, repo, rel, sha);
+        contents.set(rel, content);
+      }
+      return content;
     },
+    close: () => Promise.resolve(),
   };
+}
+
+async function removeTemp(dir) {
+  try {
+    await fsp.rm(dir, { recursive: true, force: true });
+  } catch (err) {
+    // Cleanup failure should be visible without replacing the review result.
+    core.warning(`Could not remove temporary repository ${dir}: ${err.message}`);
+  }
 }
