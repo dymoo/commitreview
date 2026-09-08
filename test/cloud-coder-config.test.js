@@ -110,6 +110,10 @@ test('requires generic model tier inputs', (t) => {
   assert.equal(config.lowComplexityReasoningEffort, 'high');
   assert.equal(config.highComplexityReasoningEffort, 'xhigh');
 
+  process.env['INPUT_HIGH-COMPLEXITY-REASONING-EFFORT'] = 'unsupported';
+  assert.throws(() => readConfig(), /high-complexity-reasoning-effort.*low.*medium.*high.*xhigh.*max/i);
+  process.env['INPUT_HIGH-COMPLEXITY-REASONING-EFFORT'] = 'xhigh';
+
   delete process.env['INPUT_HIGH-COMPLEXITY-MODEL'];
   assert.throws(() => readConfig(), /high-complexity-model.*required/i);
 });

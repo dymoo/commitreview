@@ -211,7 +211,7 @@ export async function toolLoop(llm, { system, user, repo, config, turns, closing
     try {
       ({ message } = await llm.send(messages, { tools: TOOLS, jsonMode: false }));
     } catch (err) {
-      if (err.toolsUnsupported) throw err;
+      if (err.toolsUnsupported || err.explicitEffortRequestRejected) throw err;
       core.warning(`${label} stopped after ${turn} turn(s): ${err.message}`);
       break;
     }

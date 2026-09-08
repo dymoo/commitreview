@@ -13,7 +13,10 @@ implementation, independent adversarial review, and a hand-off for your final
 merge decision.
 
 **Released now:** Shipyard Cloud Reviewer at `dymoo/shipyard@v3` and Cloud
-Coder at `dymoo/shipyard/cloud-coder@v4`.
+Coder at `dymoo/shipyard/cloud-coder@v4`. The released Reviewer v3 contract does
+not include the new optional reasoning-effort input; merging this change does
+not move existing tags. Consumers that need it must pin a supporting immutable
+revision until a separate release updates the tag.
 
 ## The loop
 
@@ -121,8 +124,9 @@ disabled until its dedicated runner and digest-pinned image are confirmed.
 
 Model choice is repository configuration, never Shipyard action code. The
 Coder requires a low-complexity model for scores 1–3 and a high-complexity
-model for scores 4–5; reasoning effort is optional for each tier and omitted
-when the provider does not support it.
+model for scores 4–5; reasoning effort is optional for the Reviewer and each
+Coder tier. Omit it to use the provider default; an explicit value is validated
+and sent unchanged.
 
 Our current recommendation is GPT-5.6 Luna at `xhigh` for scores 1–3 and
 GPT-5.6 Terra at `xhigh` for scores 4–5: the useful unit is cost per
@@ -211,9 +215,15 @@ Agent Brief complexity score.
 - No completion-token cap. The provider/model owns completion length, while each
   logical model call has one ten-minute deadline shared by retries.
 
-The public inputs are `api-key`, `base-url`, `model`, `github-token`, `handoff-token`,
-`instructions` and `ignore`. See [SECURITY.md](SECURITY.md) and the maintained
-[workflow example](examples/workflows/shipyard-reviewer.yml).
+The public inputs are `api-key`, `base-url`, `model`, `reasoning-effort`,
+`github-token`, `handoff-token`, `instructions` and `ignore`. Omit
+`reasoning-effort` to use the provider default. Allowed values are `low`,
+`medium`, `high`, `xhigh` and `max`; explicit values are sent unchanged and are
+never removed during endpoint-parameter retries. See
+[SECURITY.md](SECURITY.md) and the maintained
+[workflow example](examples/workflows/shipyard-reviewer.yml). The canonical
+`@v3` example intentionally omits the unreleased input; a supporting immutable
+workflow revision may pass `vars.LLM_REASONING_EFFORT` to `reasoning-effort`.
 
 ### OpenRouter preflight
 

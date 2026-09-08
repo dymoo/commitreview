@@ -47,6 +47,7 @@ export const DEFAULT_IGNORES = [
 
 const TRIGGER_PHRASE = '@shipyard';
 const ALLOWED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+export const VALID_REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
 /**
  * Product limits are deliberate constants, not user-facing tuning knobs.
@@ -78,12 +79,14 @@ export function readConfig() {
 
   const baseUrl = requiredHttpUrl('base-url', requiredInput('base-url'));
   const model = requiredInput('model');
+  const reasoningEffort = validateReasoningEffort(core.getInput('reasoning-effort'));
   const githubApiUrl = requiredHttpUrl('GITHUB_API_URL', requiredEnv('GITHUB_API_URL'));
 
   return {
     apiKey,
     baseUrl,
     model,
+    reasoningEffort,
     githubToken,
     handoffToken,
     githubApiUrl,
@@ -97,6 +100,12 @@ function requiredInput(name) {
   const value = core.getInput(name);
   if (value) return value;
   throw new Error(`Input "${name}" is required and resolved to an empty value.`);
+}
+
+export function validateReasoningEffort(value, name = 'reasoning-effort') {
+  if (!value) return '';
+  if (VALID_REASONING_EFFORTS.includes(value)) return value;
+  throw new Error(`Input "${name}" must be one of ${VALID_REASONING_EFFORTS.join(', ')}.`);
 }
 
 function requiredEnv(name) {

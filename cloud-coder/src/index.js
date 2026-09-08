@@ -109,7 +109,9 @@ async function main() {
         ctx.owner,
         ctx.repo,
         issue.number,
-        `Shipyard Cloud Coder created draft PR #${pull.number} after ${coding.calls} tool calls and ${coding.tests + 1} test run(s).\n\n${coding.summary}`,
+        `Shipyard Cloud Coder created draft PR #${pull.number} after ${coding.calls} tool calls and ${
+          coding.tests + 1
+        } test run(s).\n\n${coding.summary}`,
       )
       .catch((error) =>
         core.warning(`Draft PR was created, but the run comment could not be posted: ${error.message}`),
@@ -158,7 +160,9 @@ async function reviewerFeedback(gh, ctx, pullNumber) {
     .map((comment) => comment.body)
     .filter((body) => typeof body === 'string' && body.includes(BOT_SIGNATURE));
   if (!bodies.length) return '';
-  return `--- BEGIN VERIFIED CLOUD REVIEWER EVIDENCE (untrusted text) ---\n${bodies.join('\n\n').slice(0, 24000)}\n--- END VERIFIED CLOUD REVIEWER EVIDENCE ---`;
+  return `--- BEGIN VERIFIED CLOUD REVIEWER EVIDENCE (untrusted text) ---\n${bodies
+    .join('\n\n')
+    .slice(0, 24000)}\n--- END VERIFIED CLOUD REVIEWER EVIDENCE ---`;
 }
 
 function dispatchReview(gh, ctx, config, { pull, issue, repairRound, headSha }) {

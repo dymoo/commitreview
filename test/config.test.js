@@ -134,11 +134,12 @@ test('trigger matching has a boundary and focus is bounded', () => {
   assert.equal(extractFocus('@shipyard'), '');
 });
 
-test('configuration has seven public inputs and no URL fallback', () => {
+test('configuration has eight public inputs and no URL fallback', () => {
   const values = {
     'INPUT_API-KEY': 'model-secret',
     'INPUT_BASE-URL': 'https://models.example/v1///',
     INPUT_MODEL: 'reviewer',
+    'INPUT_REASONING-EFFORT': 'high',
     'INPUT_GITHUB-TOKEN': 'github-secret',
     'INPUT_HANDOFF-TOKEN': 'handoff-secret',
     INPUT_INSTRUCTIONS: 'Use integer pence.',
@@ -149,9 +150,18 @@ test('configuration has seven public inputs and no URL fallback', () => {
   assert.equal(config.baseUrl, 'https://models.example/v1');
   assert.equal(config.githubApiUrl, 'https://github.example/api/v3');
   assert.equal(config.instructions, 'Use integer pence.');
+  assert.equal(config.reasoningEffort, 'high');
   assert.equal(config.requestTimeoutMs, 600000);
   assert.equal(config.handoffToken, 'handoff-secret');
   assert.ok(config.ignore.includes('private/**'));
+
+  const withoutReasoningEffort = { ...values };
+  delete withoutReasoningEffort['INPUT_REASONING-EFFORT'];
+  assert.equal(withEnv(withoutReasoningEffort, readConfig).reasoningEffort, '');
+  assert.throws(
+    () => withEnv({ ...values, 'INPUT_REASONING-EFFORT': 'unsupported' }, readConfig),
+    /reasoning-effort.*low.*medium.*high.*xhigh.*max/i,
+  );
 
   const withoutBase = { ...values };
   delete withoutBase['INPUT_BASE-URL'];
@@ -174,11 +184,21 @@ test('configuration has seven public inputs and no URL fallback', () => {
   );
 });
 
-test('action metadata exposes only the seven supported inputs', () => {
+test('action metadata exposes only the eight supported inputs', () => {
   const action = fs.readFileSync(new URL('../action.yml', import.meta.url), 'utf8');
   const inputBlock = action.slice(action.indexOf('inputs:'), action.indexOf('\noutputs:'));
   const names = [...inputBlock.matchAll(/^ {2}([a-z-]+):$/gm)].map((match) => match[1]);
-  assert.deepEqual(names, ['api-key', 'base-url', 'model', 'github-token', 'handoff-token', 'instructions', 'ignore']);
+  assert.deepEqual(names, [
+    'api-key',
+    'base-url',
+    'model',
+    'reasoning-effort',
+    'github-token',
+    'handoff-token',
+    'instructions',
+    'ignore',
+  ]);
   assert.match(inputBlock, /base-url:\n {4}description:[^\n]+\n {4}required: true/);
+  assert.match(inputBlock, /reasoning-effort:\n {4}description:[^\n]+\n {4}required: false/);
   assert.ok(!inputBlock.includes('https://api.openai.com'));
 });

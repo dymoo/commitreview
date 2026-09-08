@@ -50,7 +50,9 @@ export function renderSummary(result, config) {
 
   out.push(
     '',
-    `**${all.length} finding${all.length === 1 ? '' : 's'}** across ${reviewedFiles} file${reviewedFiles === 1 ? '' : 's'} — ${countText}`,
+    `**${all.length} finding${all.length === 1 ? '' : 's'}** across ${reviewedFiles} file${
+      reviewedFiles === 1 ? '' : 's'
+    } — ${countText}`,
   );
 
   if (all.length) {
@@ -60,7 +62,9 @@ export function renderSummary(result, config) {
         ? `\`${displayPath(finding.path)}:${finding.anchor.line}\``
         : `\`${displayPath(finding.path)}\``;
       out.push(
-        `| ${SEVERITY_ICON[finding.severity] || '•'} | ${finding.severity} | ${escapeCell(escapeInline(finding.title))} | ${location} |`,
+        `| ${SEVERITY_ICON[finding.severity] || '•'} | ${finding.severity} | ${escapeCell(
+          escapeInline(finding.title),
+        )} | ${location} |`,
       );
     }
   } else {
@@ -74,7 +78,11 @@ export function renderSummary(result, config) {
       '',
       ...demoted.map(
         (finding) =>
-          `- **${finding.severity}** \`${displayPath(finding.path)}\`${finding.line ? `:${finding.line}` : ''} — ${escapeInline(finding.title)}\n  ${oneLine(safeModelMarkdown(finding.body, 4000))}\n  <!-- shipyard:fp=${finding.fp} -->`,
+          `- **${finding.severity}** \`${displayPath(finding.path)}\`${
+            finding.line ? `:${finding.line}` : ''
+          } — ${escapeInline(finding.title)}\n  ${oneLine(safeModelMarkdown(finding.body, 4000))}\n  <!-- shipyard:fp=${
+            finding.fp
+          } -->`,
       ),
       '',
       '</details>',
@@ -134,7 +142,9 @@ export async function postInline(gh, ctx, pr, comments) {
     await gh.createReview(ctx.owner, ctx.repo, ctx.prNumber, {
       commit_id: pr.head.sha,
       event: 'COMMENT',
-      body: `**Shipyard Cloud Reviewer** left ${comments.length} comment${comments.length === 1 ? '' : 's'}.\n${BOT_SIGNATURE}`,
+      body: `**Shipyard Cloud Reviewer** left ${comments.length} comment${
+        comments.length === 1 ? '' : 's'
+      }.\n${BOT_SIGNATURE}`,
       comments,
     });
     return comments.length;

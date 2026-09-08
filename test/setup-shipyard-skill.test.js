@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { validateInstalled, validatePreflight } from '../skills/setup-shipyard/validate.mjs';
 
 const CONFIG = {
@@ -222,6 +223,31 @@ test('the documented Shipyard contract stays identical to the enforced template'
 
   assert.ok(documented);
   assert.equal(documented.replace(/^ {3}/gm, ''), template.trimEnd());
+});
+
+test('the setup validator works when installed without the Shipyard source tree', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-portable-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, 'setup-shipyard');
+  fs.cpSync(new URL('../skills/setup-shipyard/', import.meta.url), installed, { recursive: true });
+  const validator = pathToFileURL(path.join(installed, 'validate.mjs')).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      `
+    import assert from 'node:assert/strict';
+    import { validatePreflight } from ${JSON.stringify(validator)};
+    const config = ${JSON.stringify({ ...CONFIG, root })};
+    config.readRemote = () => 'git@github.com:dymoo/example.git';
+    validatePreflight(config);
+    assert.throws(() => validatePreflight({ ...config, lowComplexityReasoningEffort: 'invalid' }));
+  `,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('the setup validator refuses unknown command options', (t) => {
