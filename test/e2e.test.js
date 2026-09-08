@@ -127,6 +127,8 @@ function standardReply({ findings = FINDINGS, verdict = 'real' } = {}) {
  *   llmReply?: (body: any) => string|object,
  *   rejectTools?: boolean,
  *   rejectReasoningEffort?: boolean,
+ *   reasoningRejectionMessage?: string,
+ *   reasoningRejectionToolsOnly?: boolean,
  *   repoFiles?: Record<string, string>,
  *   baseRepoFiles?: Record<string, string>,
  *   diffText?: string,
@@ -140,6 +142,8 @@ async function stubServer({
   llmReply = standardReply(),
   rejectTools = false,
   rejectReasoningEffort = false,
+  reasoningRejectionMessage = 'reasoning_effort is unsupported',
+  reasoningRejectionToolsOnly = false,
   repoFiles = REPO_FILES,
   baseRepoFiles = BASE_REPO_FILES,
   diffText = APP_DIFF,
@@ -191,8 +195,8 @@ async function stubServer({
         if (rejectTools && body.tools) {
           return send(400, { error: { message: 'this model does not support tools' } });
         }
-        if (rejectReasoningEffort && body.reasoning_effort) {
-          return send(400, { error: { message: 'reasoning_effort is unsupported' } });
+        if (rejectReasoningEffort && body.reasoning_effort && (!reasoningRejectionToolsOnly || body.tools)) {
+          return send(400, { error: { message: reasoningRejectionMessage } });
         }
         const reply = llmReply(body);
         const message = typeof reply === 'string' ? { content: reply } : reply;
@@ -371,6 +375,22 @@ test('an explicitly rejected reviewer reasoning effort fails without a downgrade
   assert.equal(captured.reviews.length, 0);
   assert.equal(captured.createdComments.length, 0);
   assert.match(`${run.stdout}\n${run.stderr}`, /explicitly configured reasoning_effort/i);
+});
+
+test('a generic explicit-effort rejection cannot produce a successful review', async (t) => {
+  const { server, captured, port } = await stubServer({
+    rejectReasoningEffort: true,
+    reasoningRejectionMessage: 'Invalid request: unsupported parameter',
+    reasoningRejectionToolsOnly: true,
+  });
+  t.after(() => server.close());
+
+  const run = await runAction(port, { 'INPUT_REASONING-EFFORT': 'high' });
+  assert.notEqual(run.code, 0);
+  assert.ok(captured.llmRequests.length > 0);
+  assert.ok(captured.llmRequests.every((request) => request.reasoning_effort === 'high'));
+  assert.equal(captured.reviews.length, 0);
+  assert.equal(captured.createdComments.length, 0);
 });
 
 test('one skeptic can refute candidates before anything is posted inline', async (t) => {

@@ -109,6 +109,26 @@ test('an explicitly configured reasoning effort rejects endpoint parameter error
   }
 });
 
+test('generic explicit-effort parameter rejections stay fatal after compatibility retries', async () => {
+  for (const status of [400, 404, 422]) {
+    const requests = [];
+    const llm = new LLM(
+      { ...base, reasoningEffort: 'high' },
+      {
+        fetch: async (_url, init) => {
+          requests.push(JSON.parse(String(init.body)));
+          return new Response('Invalid request: unsupported parameter', { status });
+        },
+      },
+    );
+    await assert.rejects(() => llm.send([{ role: 'user', content: 'review this' }]), {
+      explicitEffortRequestRejected: true,
+    });
+    assert.ok(requests.length > 0);
+    assert.ok(requests.every((request) => request.reasoning_effort === 'high'));
+  }
+});
+
 test('OpenRouter requests deny provider data collection and require ZDR', () => {
   const llm = new LLM({ ...base, baseUrl: 'https://openrouter.ai/api/v1' });
   const expectedPolicy = {

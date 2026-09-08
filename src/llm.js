@@ -167,27 +167,27 @@ export class LLM {
         throw e;
       }
 
-      if (
-        this.config.reasoningEffort &&
-        (res.status === 400 || res.status === 422 || res.status === 404) &&
-        /reasoning[-_ ]?effort/i.test(text)
-      ) {
-        const error = /** @type {Error & {reasoningEffortUnsupported?: boolean}} */ (
-          new Error(
-            `Endpoint rejected explicitly configured reasoning_effort (${res.status}); ` +
-              `Shipyard will not retry without it. ${truncate(text, 200)}`,
-          )
-        );
-        error.reasoningEffortUnsupported = true;
-        throw error;
-      }
-
       if ((res.status === 400 || res.status === 422 || res.status === 404) && attempt++ < 4) {
         // Another in-flight request may already have adapted for this same
         // rejection. If so, simply retry with the new quirks rather than
         // adapting again and stripping an unrelated parameter.
         if (this.quirksVersion !== builtAt) continue;
         if (this.adapt(text)) continue;
+      }
+
+      // Once optional compatibility retries are exhausted, a rejected explicit-
+      // effort request is fatal even if the provider omits the parameter name.
+      // Otherwise the investigation loop could swallow it and publish a review
+      // with its required context-gathering pass missing.
+      if (this.config.reasoningEffort && (res.status === 400 || res.status === 422 || res.status === 404)) {
+        const error = /** @type {Error & {explicitEffortRequestRejected?: boolean}} */ (
+          new Error(
+            `Endpoint rejected a request with explicitly configured reasoning_effort (${res.status}); ` +
+              `Shipyard will not retry without it. ${truncate(text, 200)}`,
+          )
+        );
+        error.explicitEffortRequestRejected = true;
+        throw error;
       }
 
       if (res.status === 401 || res.status === 403) {
