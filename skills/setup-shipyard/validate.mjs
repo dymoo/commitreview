@@ -2,7 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { validateReasoningEffort } from '../../src/config.js';
+
+// This skill installs independently of the action's source tree. Keep its input
+// guard self-contained rather than importing the reviewer's runtime config.
+const VALID_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
 const SECRET_NAME = /^[A-Z][A-Z0-9_]*$/;
 const RUNNER_LABEL = /^[A-Za-z0-9_.-]+$/;
@@ -89,7 +92,9 @@ export function validatePreflight(config) {
     ['Low-complexity reasoning effort', config.lowComplexityReasoningEffort],
     ['High-complexity reasoning effort', config.highComplexityReasoningEffort],
   ]) {
-    validateReasoningEffort(value, name);
+    if (value && !VALID_REASONING_EFFORTS.has(value)) {
+      throw new Error(`${name} must be one of ${[...VALID_REASONING_EFFORTS].join(', ')}.`);
+    }
   }
 }
 
