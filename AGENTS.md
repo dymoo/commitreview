@@ -62,9 +62,13 @@ Ponytail. Planning skills stay in the local coding session and are never loaded
 by the cloud executor.
 
 The review action's public inputs are exactly `api-key`, `base-url`, `model`,
-`github-token`, `handoff-token`, `instructions` and `ignore`. When its base URL
-is exactly OpenRouter, the shared client adds the fixed public app attribution
-headers `HTTP-Referer: https://github.com/dymoo/shipyard` and
+`reasoning-effort`, `github-token`, `handoff-token`, `instructions` and `ignore`.
+When omitted, reasoning effort uses the provider default; an explicit validated
+value is sent unchanged. The released `dymoo/shipyard@v3` reference does not
+accept this new input; consumers must pin a supporting immutable revision until
+it is released. The self-review workflow remains on `@v3` and omits it. When
+its base URL is exactly OpenRouter, the shared client adds the fixed public app
+attribution headers `HTTP-Referer: https://github.com/dymoo/shipyard` and
 `X-OpenRouter-Title: Shipyard`, plus one `session_id` derived from the opaque
 GitHub workflow-run identifier to keep provider prompt caches sticky. It never
 enables OpenRouter response caching: turns are stateful and account-level ZDR
@@ -110,9 +114,9 @@ to their Shipyard action before a runner starts; a recognised dispatch without
 its configured HMAC token/proof fails visibly.
 
 Shipyard's own pilot Coder workflow is `.github/workflows/shipyard-coder.yml`.
-It reads its low/high model tiers and optional reasoning efforts from repository
-Variables, plus the shared hand-off secret and digest-pinned Node 20 sandbox
-image. Shipyard's pilot Agent Briefs use `npm test`; a consumer whose Brief
+It reads its Coder low/high model tiers and optional reasoning efforts from
+repository Variables, plus the shared hand-off secret and digest-pinned Node 20
+sandbox image. Shipyard's pilot Agent Briefs use `npm test`; a consumer whose Brief
 declares another command must publish a test-toolchain image and pass that
 image's immutable digest instead. Cloud Coder and Cloud Reviewer run on the ARC
 release-name label `shipyard-runners`. That runner is dedicated,
@@ -292,6 +296,9 @@ Keep the diff to one purpose. If it does two things, it is two pull requests.
   requirement that omitted optional reasoning-effort Variables are unset. Its
   non-atomic setup order is recoverable: keep Coder disabled, inspect or fix
   partial state, then enable only after successful live validation.
+- 2026-08-04: Exposed an optional validated Reviewer reasoning effort, preserving
+  provider defaults when omitted and failing rather than dropping an explicit
+  effort on endpoint rejection.
 - 2026-08-04: Added the non-secret `SHIPYARD_CODER_READY` admission gate so a
   missing Coder secret does not allocate a privileged runner.
 - 2026-08-04: Made Cloud Coder model tiers and reasoning effort repository

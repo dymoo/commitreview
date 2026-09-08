@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import * as core from '../../src/core.js';
+import { validateReasoningEffort } from '../../src/config.js';
 import { verifiesHandoffProof } from '../../src/handoff.js';
 
 const REQUIRED_SECTIONS = [
@@ -71,8 +72,14 @@ export function readConfig() {
     baseUrl: requiredUrl('base-url', requiredInput('base-url')),
     lowComplexityModel: requiredInput('low-complexity-model'),
     highComplexityModel: requiredInput('high-complexity-model'),
-    lowComplexityReasoningEffort: core.getInput('low-complexity-reasoning-effort'),
-    highComplexityReasoningEffort: core.getInput('high-complexity-reasoning-effort'),
+    lowComplexityReasoningEffort: validateReasoningEffort(
+      core.getInput('low-complexity-reasoning-effort'),
+      'low-complexity-reasoning-effort',
+    ),
+    highComplexityReasoningEffort: validateReasoningEffort(
+      core.getInput('high-complexity-reasoning-effort'),
+      'high-complexity-reasoning-effort',
+    ),
     sandboxImage: requiredInput('sandbox-image'),
     githubApiUrl: requiredUrl('GITHUB_API_URL', requiredEnv('GITHUB_API_URL')),
     ...LIMITS,

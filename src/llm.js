@@ -4,8 +4,10 @@
  * "OpenAI-compatible" is a spectrum: OpenRouter, Ollama, vLLM, Together, Groq
  * and friends all serve /chat/completions but disagree about response_format.
  * The client probes the structured-output parameters it can live without,
- * drops a rejected one and remembers for the rest of the run. Completion length
- * is deliberately left to the provider and model.
+ * drops a rejected one and remembers for the rest of the run. An explicitly
+ * configured reasoning effort is part of the caller's contract, so it remains
+ * fixed and a parameter rejection fails the request. Completion length is
+ * deliberately left to the provider and model.
  *
  * Structured output is used when offered but never assumed. A call that passes a
  * `schema` asks for it three ways, strongest first: `json_schema` (the model is
@@ -43,7 +45,6 @@ export class LLM {
       // The strongest JSON rung. Dropped to plain json_object on rejection; only
       // ever attempted when a call actually passes a schema.
       jsonSchema: true,
-      reasoningEffort: Boolean(config.reasoningEffort),
     };
     this.usage = { prompt: 0, completion: 0, cached: 0, cacheWrite: 0, requests: 0 };
     // Bumped whenever quirks change, so a request built against older quirks
@@ -59,7 +60,7 @@ export class LLM {
       const sessionId = openRouterSessionId(this.runtime.env);
       if (sessionId) body.session_id = sessionId;
     }
-    if (this.quirks.reasoningEffort) body.reasoning_effort = this.config.reasoningEffort;
+    if (this.config.reasoningEffort) body.reasoning_effort = this.config.reasoningEffort;
     // response_format and tools do not mix on several gateways; tools win.
     const wantJson = jsonMode === undefined ? this.quirks.jsonMode : jsonMode && this.quirks.jsonMode;
     if (wantJson && !tools) {
@@ -84,7 +85,8 @@ export class LLM {
 
   /**
    * One request, returning the whole assistant message so a tool loop can see
-   * tool_calls. Adapts and retries around parameters the endpoint rejects.
+   * tool_calls. Adapts and retries around optional compatibility parameters the
+   * endpoint rejects.
    * @returns {Promise<{message: any}>}
    */
   async send(messages, options = {}) {
@@ -165,6 +167,21 @@ export class LLM {
         throw e;
       }
 
+      if (
+        this.config.reasoningEffort &&
+        (res.status === 400 || res.status === 422 || res.status === 404) &&
+        /reasoning[-_ ]?effort/i.test(text)
+      ) {
+        const error = /** @type {Error & {reasoningEffortUnsupported?: boolean}} */ (
+          new Error(
+            `Endpoint rejected explicitly configured reasoning_effort (${res.status}); ` +
+              `Shipyard will not retry without it. ${truncate(text, 200)}`,
+          )
+        );
+        error.reasoningEffortUnsupported = true;
+        throw error;
+      }
+
       if ((res.status === 400 || res.status === 422 || res.status === 404) && attempt++ < 4) {
         // Another in-flight request may already have adapted for this same
         // rejection. If so, simply retry with the new quirks rather than
@@ -187,7 +204,7 @@ export class LLM {
     if (this.runtime.now() >= deadline) throw requestDeadlineError(this.config.requestTimeoutMs, cause);
   }
 
-  /** Drop or rename whatever the endpoint just complained about. @returns {boolean} changed */
+  /** Drop or rename an optional compatibility parameter the endpoint just complained about. @returns {boolean} changed */
   adapt(errorText) {
     const changed = this.#adapt(errorText || '');
     if (changed) this.quirksVersion++;
@@ -195,6 +212,10 @@ export class LLM {
   }
 
   #adapt(t) {
+    // Explicit effort is a caller contract, not an optional compatibility
+    // parameter. Keep it in every retry and let send() report its rejection.
+    if (this.config.reasoningEffort && /reasoning[-_ ]?effort/i.test(t)) return false;
+
     // Drop json_schema to plain json_object first — many endpoints serve one and
     // not the other. Matched on schema-specific wording so a bare
     // "response_format not supported" falls straight through to the rung below.
@@ -206,11 +227,6 @@ export class LLM {
     if (this.quirks.jsonMode && /response_format|json_object|json_schema/i.test(t)) {
       core.warning('Endpoint rejected response_format — falling back to prompt-only JSON.');
       this.quirks.jsonMode = false;
-      return true;
-    }
-    if (this.quirks.reasoningEffort && /reasoning[_ ]?effort/i.test(t)) {
-      core.warning('Endpoint rejected reasoning_effort — retrying without it.');
-      this.quirks.reasoningEffort = false;
       return true;
     }
     // Some gateways reject json mode without naming it. Try once without.

@@ -277,7 +277,9 @@ async function gatherContext({ llm, repo, rulesRepo, selected, diffText, pr, con
     conventions: docs.length,
   };
   core.info(
-    `Codebase context: ${docs.length} instruction doc(s), ${stats.toolCalls} lookup(s), ~${estimateTokens(text)} tokens.`,
+    `Codebase context: ${docs.length} instruction doc(s), ${stats.toolCalls} lookup(s), ~${estimateTokens(
+      text,
+    )} tokens.`,
   );
   return text ? { text, tokens: estimateTokens(text), stats } : null;
 }

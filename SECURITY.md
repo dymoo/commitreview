@@ -29,7 +29,9 @@ model. Receivers reject a proof unless the live pull-request head still matches.
 `https://openrouter.ai/api/v1`, every request requires an endpoint with data
 collection denied, Zero Data Retention and support for all request parameters.
 If no route satisfies that policy, review fails rather than relaxing the policy
-or falling back. The source-free preflight verifies the current key's spend
+or falling back. When a reasoning effort is explicitly configured, a 400/404
+parameter rejection also fails rather than retrying without that effort. The
+source-free preflight verifies the current key's spend
 limit/reset interval, effective model allowlist, ZDR route and strict synthetic
 tool route immediately before source-bearing review. Each OpenRouter request
 also sends fixed public attribution metadata: title `Shipyard` and URL

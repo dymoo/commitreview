@@ -75,15 +75,38 @@ test('request body leaves completion length to the provider and model', () => {
   assert.equal(body.temperature, undefined);
   assert.equal(body.max_tokens, undefined);
   assert.equal(body.max_completion_tokens, undefined);
+  assert.equal(body.reasoning_effort, undefined);
   assert.deepEqual(body.response_format, { type: 'json_object' });
   assert.equal(body.provider, undefined);
 });
 
-test('sends configured reasoning effort and drops it only when the endpoint rejects it', () => {
+test('sends configured reasoning effort and never adapts it away', () => {
   const llm = new LLM({ ...base, reasoningEffort: 'xhigh' });
   assert.equal(llm.buildBody([]).reasoning_effort, 'xhigh');
-  assert.equal(llm.adapt('reasoning_effort is unsupported'), true);
-  assert.equal('reasoning_effort' in llm.buildBody([]), false);
+  assert.equal(llm.adapt('reasoning_effort is unsupported'), false);
+  assert.equal(llm.buildBody([]).reasoning_effort, 'xhigh');
+});
+
+test('an explicitly configured reasoning effort rejects endpoint parameter errors', async () => {
+  for (const status of [400, 404]) {
+    const requests = [];
+    const llm = new LLM(
+      { ...base, reasoningEffort: 'high' },
+      {
+        fetch: async (_url, init) => {
+          requests.push(JSON.parse(String(init.body)));
+          return new Response('reasoning_effort is unsupported', { status });
+        },
+      },
+    );
+
+    await assert.rejects(
+      () => llm.send([{ role: 'user', content: 'review this' }]),
+      /explicitly configured reasoning_effort.*will not retry without it/i,
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].reasoning_effort, 'high');
+  }
 });
 
 test('OpenRouter requests deny provider data collection and require ZDR', () => {
@@ -98,6 +121,9 @@ test('OpenRouter requests deny provider data collection and require ZDR', () => 
   assert.deepEqual(llm.buildBody([{ role: 'user', content: 'review this' }]).provider, expectedPolicy);
   assert.deepEqual(llm.buildBody([], { schema: { type: 'object' } }).provider, expectedPolicy);
   assert.deepEqual(llm.buildBody([], { tools }).provider, expectedPolicy);
+  const explicit = new LLM({ ...base, baseUrl: 'https://openrouter.ai/api/v1', reasoningEffort: 'high' });
+  assert.equal(explicit.buildBody([]).reasoning_effort, 'high');
+  assert.deepEqual(explicit.buildBody([]).provider, expectedPolicy);
 });
 
 test('OpenRouter requests identify Shipyard without attributing other compatible endpoints', async () => {
@@ -328,7 +354,6 @@ test('a concurrent adaptation is retried rather than adapted twice', () => {
   llm.adapt('Unsupported parameter: response_format');
   assert.notEqual(llm.quirksVersion, before, 'a real adaptation bumps the version');
   assert.equal(llm.quirks.jsonMode, false);
-  assert.equal(llm.quirks.reasoningEffort, false, 'an unrelated quirk is untouched');
 });
 
 test('adaptation eventually gives up instead of looping', () => {

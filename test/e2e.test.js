@@ -126,6 +126,7 @@ function standardReply({ findings = FINDINGS, verdict = 'real' } = {}) {
  * @param {{
  *   llmReply?: (body: any) => string|object,
  *   rejectTools?: boolean,
+ *   rejectReasoningEffort?: boolean,
  *   repoFiles?: Record<string, string>,
  *   baseRepoFiles?: Record<string, string>,
  *   diffText?: string,
@@ -138,6 +139,7 @@ function standardReply({ findings = FINDINGS, verdict = 'real' } = {}) {
 async function stubServer({
   llmReply = standardReply(),
   rejectTools = false,
+  rejectReasoningEffort = false,
   repoFiles = REPO_FILES,
   baseRepoFiles = BASE_REPO_FILES,
   diffText = APP_DIFF,
@@ -188,6 +190,9 @@ async function stubServer({
         captured.llmRequests.push(body);
         if (rejectTools && body.tools) {
           return send(400, { error: { message: 'this model does not support tools' } });
+        }
+        if (rejectReasoningEffort && body.reasoning_effort) {
+          return send(400, { error: { message: 'reasoning_effort is unsupported' } });
         }
         const reply = llmReply(body);
         const message = typeof reply === 'string' ? { content: reply } : reply;
@@ -307,6 +312,7 @@ test('reviews, verifies, anchors and posts the v2 output contract', async (t) =>
   const run = await runAction(port);
   assert.equal(run.code, 0, `action failed:\n${run.stdout}\n${run.stderr}`);
 
+  assert.ok(captured.llmRequests.every((request) => request.reasoning_effort === undefined));
   const review = captured.llmRequests.find(isReview);
   assert.match(review.messages[1].content, /^\s+7\s+7 ~ line 7$/m);
   assert.match(review.messages[1].content, /^\s+12 \+ {3}if \(!user\) return null;$/m);
@@ -342,6 +348,29 @@ test('reviews, verifies, anchors and posts the v2 output contract', async (t) =>
   assert.ok(run.stdout.includes('::add-mask::secret-key'));
   assert.ok(!logged.includes('secret-key'));
   assert.ok(!logged.includes('gh-token'));
+});
+
+test('an explicit reviewer reasoning effort reaches every model request', async (t) => {
+  const { server, captured, port } = await stubServer();
+  t.after(() => server.close());
+
+  const run = await runAction(port, { 'INPUT_REASONING-EFFORT': 'high' });
+  assert.equal(run.code, 0, run.stderr);
+  assert.ok(captured.llmRequests.length > 0);
+  assert.ok(captured.llmRequests.every((request) => request.reasoning_effort === 'high'));
+});
+
+test('an explicitly rejected reviewer reasoning effort fails without a downgraded retry', async (t) => {
+  const { server, captured, port } = await stubServer({ rejectReasoningEffort: true });
+  t.after(() => server.close());
+
+  const run = await runAction(port, { 'INPUT_REASONING-EFFORT': 'high' });
+  assert.notEqual(run.code, 0);
+  assert.equal(captured.llmRequests.length, 1);
+  assert.equal(captured.llmRequests[0].reasoning_effort, 'high');
+  assert.equal(captured.reviews.length, 0);
+  assert.equal(captured.createdComments.length, 0);
+  assert.match(`${run.stdout}\n${run.stderr}`, /explicitly configured reasoning_effort/i);
 });
 
 test('one skeptic can refute candidates before anything is posted inline', async (t) => {

@@ -29,7 +29,7 @@ function makeTarball(files) {
 
 async function stubServer() {
   const archive = makeTarball({ 'src/original.js': 'export const original = true;\n' });
-  const captured = { dispatches: [], pulls: [], refUpdates: [], modelRequests: 0 };
+  const captured = { dispatches: [], pulls: [], refUpdates: [], modelRequests: 0, modelBodies: [] };
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
     let raw = '';
@@ -78,6 +78,7 @@ async function stubServer() {
       if (url.pathname === '/repos/o/r/issues/7/comments' && request.method === 'POST') return send(201, { id: 1 });
       if (url.pathname === '/v1/chat/completions' && request.method === 'POST') {
         captured.modelRequests++;
+        captured.modelBodies.push(JSON.parse(raw));
         return send(200, modelReply(captured.modelRequests));
       }
       return send(404, { message: `unstubbed ${request.method} ${url.pathname}` });
@@ -183,6 +184,7 @@ test('the Cloud Coder entrypoint tests and publishes one draft before dispatchin
   const run = await runAction(port, dockerDirectory);
   assert.equal(run.code, 0, `${run.stdout}\n${run.stderr}`);
   assert.equal(captured.modelRequests, 3);
+  assert.ok(captured.modelBodies.every((body) => body.reasoning_effort === 'xhigh'));
   assert.deepEqual(captured.pulls, [
     {
       title: 'Shipyard: Add generated file',

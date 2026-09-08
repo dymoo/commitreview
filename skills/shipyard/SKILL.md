@@ -73,8 +73,11 @@ Shipyard never auto-merges.
 ## Current release boundary
 
 Cloud Reviewer is released as `dymoo/shipyard@v3` and Cloud Coder as
-`dymoo/shipyard/cloud-coder@v4`. Before applying `ready-for-agent`, confirm the
-repository has both workflows. Shipyard accepts their fixed repair hand-off only
+`dymoo/shipyard/cloud-coder@v4`. The unreleased Reviewer reasoning-effort input
+is not part of `@v3`; consumers using it must pin a supporting immutable
+revision until a separate release updates the tag. Merging main does not move
+existing tags. Before applying `ready-for-agent`, confirm the repository has
+both workflows. Shipyard accepts their fixed repair hand-off only
 with a HMAC proof bound to the repository, direction, Issue, PR, repair round and exact
 head commit; it stores no shared secret in the dispatch payload and exposes none
 to either model.

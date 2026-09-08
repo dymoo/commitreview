@@ -16,6 +16,10 @@ inputs:
   model:
     description: Model id as the provider names it.
     required: true
+  reasoning-effort:
+    description: Optional low, medium, high, xhigh, or max effort passed unchanged.
+    required: false
+    default: ''
   github-token:
     description: Token used to read the pull request and post comments.
     required: false
