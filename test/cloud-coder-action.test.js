@@ -66,8 +66,7 @@ test('the Shipyard reviewer pilot targets the dedicated ARC scale set', () => {
   const workflow = fs.readFileSync(new URL('../.github/workflows/shipyard-reviewer.yml', import.meta.url), 'utf8');
   assert.match(workflow, /^name: Shipyard Cloud Reviewer$/m);
   assert.match(workflow, /runs-on: shipyard-runners/);
-  assert.match(workflow, /vars\.LLM_BASE_URL != ''/);
-  assert.match(workflow, /vars\.LLM_MODEL != ''/);
+  assert.match(workflow, /vars\.OPENROUTER_REVIEWER_ENABLED == 'true'/);
 
   const example = fs.readFileSync(new URL('../examples/workflows/shipyard-reviewer.yml', import.meta.url), 'utf8');
   assert.match(example, /vars\.LLM_BASE_URL != ''/);
