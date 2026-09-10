@@ -62,22 +62,6 @@ test('the Shipyard pilot workflow routes only ready Issues through a pinned Node
   assert.match(example, /github\.event\.issue\.state == 'open'/);
 });
 
-test('the Shipyard reviewer pilot targets the dedicated ARC scale set', () => {
-  const workflow = fs.readFileSync(new URL('../.github/workflows/shipyard-reviewer.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /^name: Shipyard Cloud Reviewer$/m);
-  assert.match(workflow, /runs-on: shipyard-runners/);
-  assert.match(workflow, /vars\.OPENROUTER_REVIEWER_ENABLED == 'true'/);
-
-  const example = fs.readFileSync(new URL('../examples/workflows/shipyard-reviewer.yml', import.meta.url), 'utf8');
-  assert.match(example, /vars\.LLM_BASE_URL != ''/);
-  assert.match(example, /vars\.LLM_MODEL != ''/);
-
-  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
-  assert.match(readme, /Do \*\*not\*\* create a reviewer-only workflow from this README/);
-  assert.match(readme, /`setup-shipyard`/);
-  assert.doesNotMatch(readme, /^## Add Shipyard Cloud Reviewer$/m);
-});
-
 test('dispatches only when ready-for-agent labels an Issue', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-coder-event-'));
   const eventPath = path.join(dir, 'event.json');

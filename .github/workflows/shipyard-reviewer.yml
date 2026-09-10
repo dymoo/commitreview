@@ -35,8 +35,8 @@ jobs:
         with:
           api-key: ${{ secrets.OPENROUTER_REVIEWER_API_KEY }}
           base-url: https://openrouter.ai/api/v1
-          model: z-ai/glm-5.3-flash
-          reasoning-effort: high
+          model: deepseek/deepseek-v4.1-flash
+          reasoning-effort: max
           handoff-token: ${{ secrets.SHIPYARD_HANDOFF_TOKEN }}
           instructions: |
             This action has no runtime dependencies. Any import that is not
