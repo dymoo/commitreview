@@ -182,6 +182,20 @@ image and `npm test`, because that command uses only Node's built-in test
 runner. A consumer whose Agent Brief declares another test command must publish
 an image containing that toolchain and use its immutable digest.
 
+This repository's own reviewer pilot uses `deepseek/deepseek-v4.1-flash`
+through OpenRouter with explicit `max` reasoning and a supporting immutable
+action revision. It
+uses a dedicated `OPENROUTER_REVIEWER_API_KEY`, not the Coder's `LLM_API_KEY`.
+Keep its `OPENROUTER_REVIEWER_ENABLED` Variable absent or `false` until the new
+key and existing `SHIPYARD_HANDOFF_TOKEN` are configured; set it to `true` to
+activate, and clear it before removing or rotating either secret. The reviewer
+key must allow only this model and retain strict ZDR/no-training routing with
+both OpenRouter input/output logging options off and an owner-selected spending
+cap. Account/member guardrails can further restrict it; key creation does not
+prove model eligibility. Verify an actual review after activation. Coder model
+variables and credentials remain unchanged. These pilot settings do not change
+the configurable, released-version workflow examples above.
+
 Use `dymoo/shipyard/cloud-coder@v4` in the copied workflow. Both actions must
 receive the same `SHIPYARD_HANDOFF_TOKEN`; Shipyard uses it only to sign and
 verify context-bound HMAC hand-offs, never stores it in the dispatch payload,

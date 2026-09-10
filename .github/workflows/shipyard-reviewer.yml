@@ -1,5 +1,5 @@
-# Shipyard Cloud Reviewer reviewing itself. It uses the last released major rather
-# than executing code from the pull request under review.
+# Shipyard Cloud Reviewer reviewing itself. Use an audited immutable revision,
+# never code from the pull request under review.
 name: Shipyard Cloud Reviewer
 
 on:
@@ -24,19 +24,19 @@ concurrency:
 jobs:
   review:
     if: >-
-      vars.LLM_BASE_URL != '' &&
-      vars.LLM_MODEL != '' &&
+      vars.OPENROUTER_REVIEWER_ENABLED == 'true' &&
       ((github.event_name == 'pull_request_target' &&
         !startsWith(github.event.pull_request.head.ref, 'shipyard/issue-')) ||
        (github.event_name == 'repository_dispatch' && github.event.action == 'shipyard-review') ||
        (github.event.issue.pull_request && contains(github.event.comment.body, '@shipyard')))
     runs-on: shipyard-runners
     steps:
-      - uses: dymoo/shipyard@v3
+      - uses: dymoo/shipyard@efec252b39c55bc3d902d14d59286660046f9776
         with:
-          api-key: ${{ secrets.LLM_API_KEY }}
-          base-url: ${{ vars.LLM_BASE_URL }}
-          model: ${{ vars.LLM_MODEL }}
+          api-key: ${{ secrets.OPENROUTER_REVIEWER_API_KEY }}
+          base-url: https://openrouter.ai/api/v1
+          model: deepseek/deepseek-v4.1-flash
+          reasoning-effort: max
           handoff-token: ${{ secrets.SHIPYARD_HANDOFF_TOKEN }}
           instructions: |
             This action has no runtime dependencies. Any import that is not

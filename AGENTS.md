@@ -66,8 +66,12 @@ The review action's public inputs are exactly `api-key`, `base-url`, `model`,
 When omitted, reasoning effort uses the provider default; an explicit validated
 value is sent unchanged. The released `dymoo/shipyard@v3` reference does not
 accept this new input; consumers must pin a supporting immutable revision until
-it is released. The self-review workflow remains on `@v3` and omits it. When
-its base URL is exactly OpenRouter, the shared client adds the fixed public app
+it is released. The self-review workflow pins a supporting immutable revision
+and selects `deepseek/deepseek-v4.1-flash` with explicit `max` effort. Its dedicated
+`OPENROUTER_REVIEWER_API_KEY` is separate from the Coder's `LLM_API_KEY`;
+`OPENROUTER_REVIEWER_ENABLED` must be `true` only after that key and the existing
+hand-off secret are configured. The generic `@v3` examples remain unchanged.
+When its base URL is exactly OpenRouter, the shared client adds the fixed public app
 attribution headers `HTTP-Referer: https://github.com/dymoo/shipyard` and
 `X-OpenRouter-Title: Shipyard`, plus one `session_id` derived from the opaque
 GitHub workflow-run identifier to keep provider prompt caches sticky. It never
